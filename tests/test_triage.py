@@ -35,9 +35,71 @@ def test_missing_or_unreadable_patch_is_unknown(patch):
     assert added_lines(patch) is None
 
 
+# Characters str.splitlines() treats as line breaks but Git, GitHub and Semgrep
+# do not. All are legal inside a Python comment.
+SPLITLINES_ONLY_BREAKS = ['\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\x85', ' ', ' ']
+
+
+@pytest.mark.parametrize('char', SPLITLINES_ONLY_BREAKS)
+def test_unicode_line_breaks_cannot_shift_a_new_finding_to_pre_existing(char):
+    # Line 2 adds a comment holding the character, line 3 the vulnerable call.
+    # If the parser split on it, " x" would read as a context line and the
+    # call would be recorded as line 4, leaving the finding on line 3 "pre-existing".
+    patch = f'@@ -1,2 +1,4 @@\n import os\n+# note{char} x\n+os.system(cmd)\n def f():'
+    assert added_lines(patch) == {2, 3}
+    ranked = triage([finding('app.py', 3)], {'app.py': added_lines(patch)})
+    assert ranked[0]['new'] and gate(ranked) == 'failure'
+
+
+def test_crlf_patch_rows_are_read_like_lf():
+    assert added_lines('@@ -1,2 +1,2 @@\r\n keep\r\n-x = 1\r\n+x = 2\r\n') == {2}
+
+
+@pytest.mark.parametrize('patch', [
+    '@@ -1,2 +1,2 @@\n keep\n+extra\n+too many',          # more new lines than declared
+    '@@ -1,3 +1,3 @@\n keep\n-x\n+y',                     # hunk ends early
+    '@@ -1 +1 @@\n-x\n-y\n+z',                            # more old lines than declared
+    '@@ -1,2 +1,2 @@\n a\n@@ -9 +9 @@\n-x\n+y',          # header before the previous hunk is complete
+    '@@ -0,0 +1 @@\n+a\n+b',                              # omitted count means one line
+])
+def test_hunk_that_disagrees_with_its_header_is_unknown(patch):
+    assert added_lines(patch) is None
+    ranked = triage([finding('app.py', 50)], {'app.py': added_lines(patch)})
+    assert ranked[0]['new']
+
+
 def test_pure_rename_has_no_changed_lines():
     assert changed_lines({'filename': 'b.py', 'status': 'renamed', 'changes': 0}) == set()
     assert changed_lines({'filename': 'b.py', 'status': 'renamed', 'changes': 1, 'patch': '@@ -1 +1 @@\n-x\n+y'}) == {1}
+
+
+@pytest.mark.parametrize('status,changes,patch', [
+    ('renamed', 0, None),                          # moved without edits
+    ('renamed', 1, '@@ -5 +5 @@\n-x\n+y'),         # moved with a one-line edit
+    ('copied', 0, None),
+])
+def test_moving_test_code_into_runtime_code_counts_as_entirely_new(status, changes, patch):
+    entry = {'filename': 'app/loader.py', 'previous_filename': 'tests/loader.py',
+             'status': status, 'changes': changes, **({'patch': patch} if patch else {})}
+    assert changed_lines(entry) is None
+    # pickle.loads on untouched line 3 was P2 in tests/; in runtime code it is a new P1.
+    ranked = triage([finding('app/loader.py', 3)], {'app/loader.py': changed_lines(entry)})
+    assert (ranked[0]['priority'], ranked[0]['new']) == ('P1', True) and gate(ranked) == 'failure'
+
+
+@pytest.mark.parametrize('previous,filename', [
+    ('app/old.py', 'app/new.py'),         # runtime to runtime
+    ('tests/old.py', 'tests/new.py'),     # test to test
+    ('app/loader.py', 'tests/loader.py'), # runtime to test lowers priority; nothing to re-flag
+])
+def test_other_pure_renames_stay_unchanged(previous, filename):
+    assert changed_lines({'filename': filename, 'previous_filename': previous,
+                          'status': 'renamed', 'changes': 0}) == set()
+
+
+def test_high_severity_in_conftest_fails_the_check():
+    ranked = triage([finding('tests/conftest.py', 4)], {'tests/conftest.py': {4}})
+    assert (ranked[0]['priority'], ranked[0]['test_code']) == ('P1', False) and gate(ranked) == 'failure'
 
 
 def test_changed_file_list_keeps_each_files_changed_lines(monkeypatch):
@@ -57,12 +119,13 @@ def finding(path='app.py', line=1, end=None, severity='HIGH', **extra):
 
 
 @pytest.mark.parametrize('path', ['tests/test_api.py', 'pkg/test/helpers.py', 'test_api.py',
-                                  'api_test.py', 'conftest.py', 'shop/tests.py'])
+                                  'api_test.py', 'shop/tests.py'])
 def test_test_code_follows_pytest_and_django_naming(path):
     assert is_test_path(path)
 
 
-@pytest.mark.parametrize('path', ['app.py', 'testing_utils.py', 'contest.py', 'latest.py', 'attestations/sign.py'])
+@pytest.mark.parametrize('path', ['app.py', 'testing_utils.py', 'contest.py', 'latest.py', 'attestations/sign.py',
+                                  'conftest.py', 'tests/conftest.py', 'pkg/test/conftest.py'])
 def test_everything_else_is_runtime_code(path):
     assert not is_test_path(path)
 

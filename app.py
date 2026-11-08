@@ -24,8 +24,9 @@ import requests
 from fastapi import BackgroundTasks, FastAPI, Header, Request, HTTPException
 from dotenv import load_dotenv
 
-# Load local env for dev
-if os.getenv("PRSEC_LOAD_DOTENV", "1") == "1":
+# Opt-in only (`make serve` sets PRSEC_LOAD_DOTENV=1): a service must not
+# pick up whatever .env happens to sit in its working directory.
+if os.getenv("PRSEC_LOAD_DOTENV", "0") == "1":
     load_dotenv(dotenv_path=".env")
 
 # Ensure we see everything unless caller overrides
@@ -43,7 +44,8 @@ except Exception:  # pragma: no cover
     jwt = None
 
 # ---------------- App / Logging ----------------
-app = FastAPI(title="PRSec Webhook", version="3.4.0")
+# A webhook receiver has no human API consumers; publish no schema or docs UI.
+app = FastAPI(title="PRSec Webhook", version="3.4.0", docs_url=None, redoc_url=None, openapi_url=None)
 log = logging.getLogger("webhook")
 logging.basicConfig(level=os.getenv("LOGLEVEL", "INFO"))
 BOOT_TS = time.time()
@@ -82,6 +84,9 @@ SEMGREP_TIMEOUT_S   = int(os.getenv("SEMGREP_TIMEOUT_S", "120"))
 CHECK_NAME      = os.getenv("PRSEC_CHECK_NAME", "PRSecurityScan")
 SEMGREP_EXCLUDE = [s for s in (os.getenv("SEMGREP_EXCLUDE") or "").split(",") if s]
 MAX_ANNOTS      = int(os.getenv("PRSEC_MAX_ANNOTATIONS", "200"))
+
+# GitHub responses a retry cannot fix (rate limits are handled separately).
+PERMANENT_HTTP_STATUSES = frozenset({400, 401, 403, 404, 405, 410, 422})
 
 # ---------- Helpers ----------
 def _hmac_sig(secret: str, body: bytes, algo: str) -> str:
@@ -387,8 +392,10 @@ def run_semgrep_pipeline(
                     conclusion = "cancelled"
                     summary = "PR closed or superseded by a newer commit; this job was not scanned."
                     return
-            # 1) Download repo snapshot at PR HEAD
-            repo_root = download_tarball(head_owner, head_repo, head_sha, token, installation_id, tdp)
+            # 1) Download repo snapshot at PR HEAD. GitHub keeps every PR head
+            # commit in the base repository (refs/pull/N/head), so fork PRs are
+            # read with the base-scoped installation token too.
+            repo_root = download_tarball(base_owner, base_repo, head_sha, token, installation_id, tdp)
 
             # Scan the immutable snapshot with service-owned rules only.
             # Repository rules/ignore files are untrusted and never configure this scan.
@@ -454,12 +461,22 @@ def run_semgrep_pipeline(
         defer_completion = True
         raise
     except Exception as e:
-        if MODE == 'durable' and isinstance(e, requests.RequestException):
+        status = getattr(getattr(e, 'response', None), 'status_code', None)
+        permanent = isinstance(e, requests.HTTPError) and status in PERMANENT_HTTP_STATUSES
+        if MODE == 'durable' and isinstance(e, requests.RequestException) and not permanent:
+            # Transient: the worker retries and completes this Check later.
             defer_completion = True
             raise
-        scan_error = type(e).__name__
+        if permanent:
+            # A retry cannot fix this, so the Check must not stay in progress.
+            scan_error = f'HTTP_{status}'
+            summary = (f"Scan incomplete: GitHub API returned HTTP {status} while preparing the scan "
+                       "(for example, the commit or pull request is no longer readable). "
+                       "No clean result was issued.")
+        else:
+            scan_error = type(e).__name__
+            summary = "Scan incomplete: scanner, archive, or GitHub API error. No clean result was issued."
         log.error("pipeline error type=%s", scan_error)
-        summary = "Scan incomplete: scanner, archive, or GitHub API error. No clean result was issued."
     finally:
         if not defer_completion:
             _safe_complete()

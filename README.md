@@ -70,8 +70,8 @@ Five findings, one blocker. A plain Semgrep step with `--error` would fail this 
 | **P3** | Everything else | Notice |
 
 - **New** means the finding covers at least one line the pull request added or changed, read from GitHub's diff for that file. **Pre-existing** findings are still annotated, as notices, but never fail the check.
-- If GitHub sends no diff for a file (it leaves out very large ones) or the diff can't be read, every finding in that file counts as new. A file that was only renamed counts as unchanged.
-- **Test code** follows pytest and Django naming: a `test` or `tests` folder, `test_*.py`, `*_test.py`, `tests.py` or `conftest.py`.
+- If GitHub sends no diff for a file (it leaves out very large ones) or the diff can't be read, every finding in that file counts as new. A file that was only renamed counts as unchanged, except one moved from test code to runtime code: every finding in it counts as new, since its priority just went up.
+- **Test code** follows pytest and Django naming: a `test` or `tests` folder, `test_*.py`, `*_test.py` or `tests.py`. `conftest.py` is ranked as runtime code wherever it is, because pytest imports it on every run, before any test is selected.
 - A rule whose metadata rates its own `confidence` or `likelihood` as `LOW` drops one level (P1 to P2, P2 to P3). The bundled rules don't set these yet.
 
 The Check Run title counts the new P1 findings, and the summary shows the gate result and a priority × new/pre-existing table.
@@ -80,7 +80,7 @@ The Check Run title counts the new P1 findings, and the summary shows the gate r
 
 1. Configure a GitHub App for **pull request** events with Contents read, Pull requests read, and Checks write permissions.
 2. Copy `.env.example` to `.env` and set a strong webhook secret, the App ID and the path to the App's private key. Keep the key outside the repository.
-3. Run `make serve`. `/health` reports liveness and `/docs` shows the API schema. The listener binds to loopback.
+3. Run `make serve`. It loads `.env` by setting `PRSEC_LOAD_DOTENV=1`; the app never reads `.env` otherwise, so `uvicorn app:app` on its own takes configuration from the environment only. `/health` reports liveness. The listener binds to loopback and publishes no API docs or OpenAPI schema.
 4. Exposing it through Smee or another tunnel, and installing the App, are separate steps you take yourself. A real webhook **creates real Check Runs**, so use a test repository. This repository never creates grants, installs Apps, changes branch protection or publishes itself.
 
 How it behaves:
