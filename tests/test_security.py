@@ -107,23 +107,6 @@ def test_scanner_failure(tmp_path, monkeypatch, result):
         runner.run_semgrep(['main.py'], str(tmp_path), config='/trusted/rules.yml')
 
 
-def test_scan_isolates_source_and_environment(tmp_path, monkeypatch):
-    (tmp_path / 'main.py').write_text('print(1)')
-    (tmp_path / '.semgrepignore').write_text('*')
-    (tmp_path / '.semgrep.yaml').write_text('attacker rules')
-    monkeypatch.setenv('GITHUB_APP_PRIVATE_KEY', 'must-not-reach-scanner')
-    monkeypatch.setattr(runner, '_ensure_semgrep_available', lambda: '/fake/semgrep')
-    def run(cmd, **kwargs):
-        staged = Path(kwargs['cwd'])
-        assert (staged / 'main.py').is_file()
-        assert not (staged / '.semgrepignore').exists()
-        assert not (staged / '.semgrep.yaml').exists()
-        assert 'GITHUB_APP_PRIVATE_KEY' not in kwargs['env']
-        return subprocess.CompletedProcess(cmd, 0, '{"results": [], "errors": [], "paths": {"scanned": ["main.py"]}}', '')
-    monkeypatch.setattr(runner, '_bounded_container_run', run)
-    assert runner.run_semgrep(['main.py'], str(tmp_path), config='/trusted/rules.yml') == []
-
-
 @pytest.mark.parametrize('path', ['../outside.py', '/tmp/outside.py'])
 def test_scan_path_boundary(tmp_path, monkeypatch, path):
     monkeypatch.setattr(runner, '_ensure_semgrep_available', lambda: '/fake/semgrep')

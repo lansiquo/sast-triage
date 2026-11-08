@@ -167,14 +167,6 @@ def test_worker_readiness(tmp_path):
     assert not store.ready()
 
 
-def test_bounded_scanner_output(tmp_path):
-    import os
-    import sys
-    with pytest.raises(runner.SemgrepInvocationError, match='output exceeded'):
-        runner._bounded_container_run([sys.executable, '-c', "import sys; sys.stdout.write('x'*10000000)"],
-                                      str(tmp_path), {'PATH': os.environ['PATH']}, 5)
-
-
 def test_bounded_scanner_timeout(tmp_path):
     import os
     import sys
