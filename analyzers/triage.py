@@ -80,17 +80,32 @@ def changed_lines(entry: Dict[str, Any]) -> Optional[Set[int]]:
 
     GitHub leaves out `patch` for very large diffs, which gives None (unknown).
     A file that was only renamed has no patch either, but nothing in it changed.
+
+    A file moved from test code to runtime code counts as entirely new
+    (None), with or without edits: its findings were ranked as test code
+    before, so the move is what makes them urgent.
     """
+    if entry.get("status") in {"renamed", "copied"}:
+        previous = entry.get("previous_filename")
+        if isinstance(previous, str) and is_test_path(previous) and not is_test_path(entry.get("filename", "")):
+            return None
     if entry.get("status") == "renamed" and entry.get("changes") == 0:
         return set()
     return added_lines(entry.get("patch"))
 
 
 def is_test_path(path: str) -> bool:
-    """pytest and Django naming: a test/tests folder, test_*.py, *_test.py, tests.py or conftest.py."""
+    """pytest and Django naming: a test/tests folder, test_*.py, *_test.py or tests.py.
+
+    conftest.py is never test code, even in a tests folder: pytest imports it
+    as a plugin on every run, before any test is selected, so it is ranked
+    like runtime code.
+    """
     *folders, name = PurePosixPath(path).parts
+    if name == "conftest.py":
+        return False
     return (any(folder in {"test", "tests"} for folder in folders)
-            or name.startswith("test_") or name.endswith("_test.py") or name in {"tests.py", "conftest.py"})
+            or name.startswith("test_") or name.endswith("_test.py") or name == "tests.py")
 
 
 # P1: high/critical in runtime code. Fix before merging.

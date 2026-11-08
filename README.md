@@ -70,8 +70,8 @@ Five findings, one blocker. A plain Semgrep step with `--error` would fail this 
 | **P3** | Everything else | Notice |
 
 - **New** means the finding covers at least one line the pull request added or changed, read from GitHub's diff for that file. **Pre-existing** findings are still annotated, as notices, but never fail the check.
-- If GitHub sends no diff for a file (it leaves out very large ones) or the diff can't be read, every finding in that file counts as new. A file that was only renamed counts as unchanged.
-- **Test code** follows pytest and Django naming: a `test` or `tests` folder, `test_*.py`, `*_test.py`, `tests.py` or `conftest.py`.
+- If GitHub sends no diff for a file (it leaves out very large ones) or the diff can't be read, every finding in that file counts as new. A file that was only renamed counts as unchanged, except one moved from test code to runtime code: every finding in it counts as new, since its priority just went up.
+- **Test code** follows pytest and Django naming: a `test` or `tests` folder, `test_*.py`, `*_test.py` or `tests.py`. `conftest.py` is ranked as runtime code wherever it is, because pytest imports it on every run, before any test is selected.
 - A rule whose metadata rates its own `confidence` or `likelihood` as `LOW` drops one level (P1 to P2, P2 to P3). The bundled rules don't set these yet.
 
 The Check Run title counts the new P1 findings, and the summary shows the gate result and a priority × new/pre-existing table.
