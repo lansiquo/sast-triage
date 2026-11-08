@@ -114,7 +114,7 @@ def run():
                 status = getattr(getattr(error, 'response', None), 'status_code', None)
                 reason = f'HTTP_{status}' if isinstance(error, requests.HTTPError) and status else type(error).__name__
                 permanent = not limited and (
-                    status in {400, 401, 403, 404, 405, 410, 422}
+                    status in app.PERMANENT_HTTP_STATUSES
                     or isinstance(error, (ValueError, TypeError, KeyError, RuntimeError)))
                 if permanent:
                     store.fail(job['id'], reason)

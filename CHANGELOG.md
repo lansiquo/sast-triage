@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file moved from test code to runtime code counts as entirely new, with or without edits. A pure rename used to make every finding in it pre-existing, so moving high-severity code out of `tests/` raised it to P1 without failing the check.
 - `conftest.py` is ranked as runtime code, even inside a `tests` folder. pytest imports it on every run, so high-severity findings in it are P1, not P2.
 
+### Fixed
+- Durable mode: a permanent GitHub error during a scan (HTTP 400, 401, 403, 404, 405, 410 or 422) now completes the Check Run as failure, with the status in its summary. It used to leave the Check in progress forever while the job was marked failed.
+- The pull request's head commit is downloaded from the base repository, which holds every PR head commit. Downloading it from a fork failed for private or deleted forks, because durable mode scopes the installation token to the base repository.
+
 ### Changed
 - The demo now simulates one pull request across a runtime file and a test file, with five findings that cover every triage outcome: P1 new (fails), P1 pre-existing, P2 from medium severity in runtime code, P2 from high severity in test code, and P3 pre-existing.
 
