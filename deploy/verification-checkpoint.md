@@ -1,4 +1,4 @@
-# Local verification checkpoint — 2026-10-29
+# Local verification checkpoint
 
 The official Opengrep v1.33.0 macOS ARM64 artifact still has **incomplete signature verification**. The checksum passed before Cosign ran. Exact workflow identity and GitHub Actions issuer were enforced by `verify_opengrep_signature.py`; Cosign exited 1 after four attempts because Rekor TLS negotiation timed out. An independent request to the official Rekor endpoint also timed out. No TLS, identity, issuer, or transparency-log checks were disabled.
 

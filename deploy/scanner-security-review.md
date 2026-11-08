@@ -1,4 +1,4 @@
-# Scanner dependency review — 2026-10-29
+# Scanner dependency review
 
 **Status: unresolved; deployment gate remains closed.** No vulnerability ignore list, dependency override, package metadata edit, or risk waiver was applied.
 
@@ -30,7 +30,7 @@ The installed Semgrep entrypoint can dispatch to its native engine, but its own 
 
 ## Reproduction
 
-Use the existing isolated investigation folder at `Documents/Codex/2026-10-28/task/pr-reviewer-deployment` on this Mac:
+Use the isolated investigation folder kept outside the repository on the evaluation Mac:
 
 ```sh
 .venv-scanner/bin/python -m pip check

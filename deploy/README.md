@@ -6,7 +6,7 @@
 - Existing installation: `80788483`; it currently covers all the account's repositories with broad permissions.
 - Intended service target: **`lansiquo/sast-triage`**, public, default branch `main`.
 - Existing webhook destination: HTTPS on `smee.io`. The channel URL is deliberately omitted.
-- GitHub reports no deployments and no Actions workflows for this repository.
+- GitHub reports no deployments for this repository. Its only Actions workflow is CI (`.github/workflows/ci.yml`), which runs `make check`.
 
 No App permissions, installation scope, webhook URL, repository settings or secrets have been changed. Service-issued installation tokens are narrowed to this one repository with Contents read, Pull requests read, and Checks write. This does not reduce the parent App credential's authority: moving that PEM to a host requires explicit approval.
 
@@ -29,7 +29,7 @@ SQLite provides persistent semantic deduplication by installation/repository/PR/
 
 The existing App's all-repository installation and broad permissions should be reviewed with the owner. Changing them is a separate approval decision, not part of the prepared code changes.
 
-## Dependency evidence (2026-10-29)
+## Dependency evidence
 
 - Original environment: 108 known vulnerability findings across 16 packages.
 - Isolated updated service/test environment: `pip check` passes and `pip-audit` reports no known vulnerabilities. `requirements-service.lock` records that tested environment; `requirements-service.txt` lists direct runtime dependencies.

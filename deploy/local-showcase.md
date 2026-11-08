@@ -39,7 +39,7 @@ The local process is not an OS sandbox. Production still requires supported reme
 
 ## Validation
 
-`make check`: **185 tests passed**, followed by real vulnerable/clean CLI fixture scans. JavaScript syntax and `git diff --check` passed.
+At the showcase checkpoint, `make check` passed **185 tests**, followed by real vulnerable/clean CLI fixture scans. JavaScript syntax and `git diff --check` passed.
 
 `tests/browser/owasp_demo.cjs` exercises all ten examples × both variants at desktop (1366px) and mobile (390px), exact rendered source, targeted red/green labels, inert HTML rendering, diffs before/after results, actual finding annotations, behavioral assertion states, history/reset, failed requests/retry, keyboard navigation and JavaScript errors. All passed against the live loopback server. It uses isolated headless Playwright, never the desktop Chrome profile. With Playwright already available to Node and its browser installed, run `node tests/browser/owasp_demo.cjs`; optionally set `OUT` to an existing screenshot directory. No new installation is required by the application itself.
 
