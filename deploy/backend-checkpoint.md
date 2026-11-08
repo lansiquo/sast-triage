@@ -30,7 +30,7 @@ Tests first reproduced six lifecycle/retry failures (one existing behavior alrea
 
 Delivery identity follows [GitHub webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks): a redelivery retains the original delivery ID.
 
-## Fail-closed follow-up — 2026-10-29
+## Fail-closed follow-up
 
 Three concrete gaps were reproduced with failing tests before fixing them:
 

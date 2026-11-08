@@ -6,7 +6,7 @@ Wait for the mini PC. Keep the existing GitHub App and intended `lansiquo/sast-t
 
 ## Evaluated alternative: Opengrep v1.33.0
 
-The [official release](https://github.com/opengrep/opengrep/releases/tag/v1.33.0) is dated 2026-10-27. Source commit: `641c730dd99e028ee63d2f3ab3c70a7adce4b199`. The official macOS ARM64 complete release executable was downloaded into the project investigation folder, not installed globally. Its SHA-256 matches GitHub release metadata:
+Evaluated from the [official v1.33.0 release](https://github.com/opengrep/opengrep/releases/tag/v1.33.0). Source commit: `641c730dd99e028ee63d2f3ab3c70a7adce4b199`. The official macOS ARM64 complete release executable was downloaded into the project investigation folder, not installed globally. Its SHA-256 matches GitHub release metadata:
 
 `87d38a3ca198694a651e723b503e3ff8b0547429b4b9dfa2946f75fc43bb1962`
 
@@ -40,7 +40,7 @@ The actual Opengrep and Semgrep 1.182.1 executables both passed the 15-rule comp
 
 ## Reproduce local evaluations
 
-Use `Documents/Codex/2026-10-28/task/pr-reviewer-deployment` on this Mac:
+Use the isolated investigation folder kept outside the repository on the evaluation Mac:
 
 ```sh
 PRSEC_SCANNER_COMMAND=opengrep \

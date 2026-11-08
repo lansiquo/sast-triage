@@ -1,4 +1,4 @@
-# Production readiness checkpoint — 2026-10-29
+# Production readiness checkpoint
 
 The mini PC itself is not a technical dependency. An approved Linux VM with the required separation and rootless runtime can validate the same controls. No host was installed, started or reconfigured during this checkpoint.
 
