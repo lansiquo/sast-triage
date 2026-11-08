@@ -12,6 +12,6 @@ demo:
 	PRSEC_LOAD_DOTENV=0 PYTHONDONTWRITEBYTECODE=1 $(PY) demo.py
 
 serve:
-	$(PY) -m uvicorn app:app --host 127.0.0.1 --port 8000
+	PRSEC_LOAD_DOTENV=1 $(PY) -m uvicorn app:app --host 127.0.0.1 --port 8000
 
 check: test demo
