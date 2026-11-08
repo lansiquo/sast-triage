@@ -35,6 +35,39 @@ def test_missing_or_unreadable_patch_is_unknown(patch):
     assert added_lines(patch) is None
 
 
+# Characters str.splitlines() treats as line breaks but Git, GitHub and Semgrep
+# do not. All are legal inside a Python comment.
+SPLITLINES_ONLY_BREAKS = ['\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\x85', ' ', ' ']
+
+
+@pytest.mark.parametrize('char', SPLITLINES_ONLY_BREAKS)
+def test_unicode_line_breaks_cannot_shift_a_new_finding_to_pre_existing(char):
+    # Line 2 adds a comment holding the character, line 3 the vulnerable call.
+    # If the parser split on it, " x" would read as a context line and the
+    # call would be recorded as line 4, leaving the finding on line 3 "pre-existing".
+    patch = f'@@ -1,2 +1,4 @@\n import os\n+# note{char} x\n+os.system(cmd)\n def f():'
+    assert added_lines(patch) == {2, 3}
+    ranked = triage([finding('app.py', 3)], {'app.py': added_lines(patch)})
+    assert ranked[0]['new'] and gate(ranked) == 'failure'
+
+
+def test_crlf_patch_rows_are_read_like_lf():
+    assert added_lines('@@ -1,2 +1,2 @@\r\n keep\r\n-x = 1\r\n+x = 2\r\n') == {2}
+
+
+@pytest.mark.parametrize('patch', [
+    '@@ -1,2 +1,2 @@\n keep\n+extra\n+too many',          # more new lines than declared
+    '@@ -1,3 +1,3 @@\n keep\n-x\n+y',                     # hunk ends early
+    '@@ -1 +1 @@\n-x\n-y\n+z',                            # more old lines than declared
+    '@@ -1,2 +1,2 @@\n a\n@@ -9 +9 @@\n-x\n+y',          # header before the previous hunk is complete
+    '@@ -0,0 +1 @@\n+a\n+b',                              # omitted count means one line
+])
+def test_hunk_that_disagrees_with_its_header_is_unknown(patch):
+    assert added_lines(patch) is None
+    ranked = triage([finding('app.py', 50)], {'app.py': added_lines(patch)})
+    assert ranked[0]['new']
+
+
 def test_pure_rename_has_no_changed_lines():
     assert changed_lines({'filename': 'b.py', 'status': 'renamed', 'changes': 0}) == set()
     assert changed_lines({'filename': 'b.py', 'status': 'renamed', 'changes': 1, 'patch': '@@ -1 +1 @@\n-x\n+y'}) == {1}
