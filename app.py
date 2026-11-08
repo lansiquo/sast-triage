@@ -24,8 +24,9 @@ import requests
 from fastapi import BackgroundTasks, FastAPI, Header, Request, HTTPException
 from dotenv import load_dotenv
 
-# Load local env for dev
-if os.getenv("PRSEC_LOAD_DOTENV", "1") == "1":
+# Opt-in only (`make serve` sets PRSEC_LOAD_DOTENV=1): a service must not
+# pick up whatever .env happens to sit in its working directory.
+if os.getenv("PRSEC_LOAD_DOTENV", "0") == "1":
     load_dotenv(dotenv_path=".env")
 
 # Ensure we see everything unless caller overrides
@@ -43,7 +44,8 @@ except Exception:  # pragma: no cover
     jwt = None
 
 # ---------------- App / Logging ----------------
-app = FastAPI(title="PRSec Webhook", version="3.4.0")
+# A webhook receiver has no human API consumers; publish no schema or docs UI.
+app = FastAPI(title="PRSec Webhook", version="3.4.0", docs_url=None, redoc_url=None, openapi_url=None)
 log = logging.getLogger("webhook")
 logging.basicConfig(level=os.getenv("LOGLEVEL", "INFO"))
 BOOT_TS = time.time()

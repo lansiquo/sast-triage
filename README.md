@@ -80,7 +80,7 @@ The Check Run title counts the new P1 findings, and the summary shows the gate r
 
 1. Configure a GitHub App for **pull request** events with Contents read, Pull requests read, and Checks write permissions.
 2. Copy `.env.example` to `.env` and set a strong webhook secret, the App ID and the path to the App's private key. Keep the key outside the repository.
-3. Run `make serve`. `/health` reports liveness and `/docs` shows the API schema. The listener binds to loopback.
+3. Run `make serve`. It loads `.env` by setting `PRSEC_LOAD_DOTENV=1`; the app never reads `.env` otherwise, so `uvicorn app:app` on its own takes configuration from the environment only. `/health` reports liveness. The listener binds to loopback and publishes no API docs or OpenAPI schema.
 4. Exposing it through Smee or another tunnel, and installing the App, are separate steps you take yourself. A real webhook **creates real Check Runs**, so use a test repository. This repository never creates grants, installs Apps, changes branch protection or publishes itself.
 
 How it behaves:

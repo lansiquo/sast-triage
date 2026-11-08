@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The pull request's head commit is downloaded from the base repository, which holds every PR head commit. Downloading it from a fork failed for private or deleted forks, because durable mode scopes the installation token to the base repository.
 
 ### Changed
+- The webhook app loads `.env` only when `PRSEC_LOAD_DOTENV=1`. `make serve` sets it, so the documented local flow is unchanged; starting the app any other way no longer reads a `.env` from the working directory. Durable deployments already set `PRSEC_LOAD_DOTENV=0`.
+- The webhook app no longer serves `/docs`, `/redoc` or `/openapi.json`.
 - The demo now simulates one pull request across a runtime file and a test file, with five findings that cover every triage outcome: P1 new (fails), P1 pre-existing, P2 from medium severity in runtime code, P2 from high severity in test code, and P3 pre-existing.
 
 ## [1.0.0] - 2026-11-05
