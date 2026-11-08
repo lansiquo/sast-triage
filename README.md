@@ -2,7 +2,7 @@
 
 A GitHub App service that reviews pull requests with Semgrep, **labels each finding new or pre-existing from the pull request's diff, ranks it P1–P3, and fails the check only on new P1 findings**. A pull request is blocked by what it introduced, not by what was already there.
 
-**Status: v1.0, works locally, not deployed.** Its SCA companion, [sca-triage](https://github.com/lansiquo/sca-triage), ranks npm dependency vulnerabilities by whether your code loads them, using the same P1–P3 scale.
+**Status: v1.0.** Runs locally and in its own CI; live GitHub deployment is prepared and not yet complete. Its SCA companion, [sca-triage](https://github.com/lansiquo/sca-triage), ranks npm dependency vulnerabilities by whether your code loads them, using the same P1–P3 scale.
 
 ## Why
 
@@ -29,7 +29,7 @@ python -m pip install -r requirements.txt
 make check        # offline tests, then the demo
 ```
 
-`make test` runs the offline regression suite with outbound HTTP blocked. `make demo` runs real Semgrep on three local fixtures, never executes them, and prints the triage and the resulting GitHub annotation JSON. Scanner or configuration errors exit nonzero.
+`make test` runs the offline regression suite (278 tests) with outbound HTTP blocked. `make demo` runs real Semgrep on three local fixtures, never executes them, and prints the triage and the resulting GitHub annotation JSON. Scanner or configuration errors exit nonzero.
 
 Make uses `.venv/bin/python` when it exists, otherwise `python3` (override with `PY`). Set `SEMGREP_BIN` to use a specific Semgrep; it fails if that one is unusable.
 
@@ -70,9 +70,9 @@ Five findings, one blocker. A plain Semgrep step with `--error` would fail this 
 | **P3** | Everything else | Notice |
 
 - **New** means the finding covers at least one line the pull request added or changed, read from GitHub's diff for that file. **Pre-existing** findings are still annotated, as notices, but never fail the check.
-- If GitHub sends no diff for a file (it leaves out very large ones) or the diff can't be read, every finding in that file counts as new. A file that was only renamed counts as unchanged, except one moved from test code to runtime code: every finding in it counts as new, since its priority just went up.
+- If GitHub sends no diff for a file (it leaves out very large ones) or the diff can't be read, every finding in that file counts as new. A file that was only renamed counts as unchanged, except one renamed or copied from test code to runtime code: every finding in it counts as new, since its priority just went up.
 - **Test code** follows pytest and Django naming: a `test` or `tests` folder, `test_*.py`, `*_test.py` or `tests.py`. `conftest.py` is ranked as runtime code wherever it is, because pytest imports it on every run, before any test is selected.
-- A rule whose metadata rates its own `confidence` or `likelihood` as `LOW` drops one level (P1 to P2, P2 to P3). The bundled rules don't set these yet.
+- A rule whose metadata rates its own `confidence` or `likelihood` as `LOW` drops one level (P1 to P2, P2 to P3). The 15 bundled rules leave both unset, so they rank by severity alone.
 
 The Check Run title counts the new P1 findings, and the summary shows the gate result and a priority × new/pre-existing table.
 
@@ -92,7 +92,7 @@ How it behaves:
 - Deleted-only or non-Python changes get a neutral result. Scanner errors and partial results fail the check; they never pass it.
 - Findings are sorted P1 first, capped at 200 annotations, and uploaded in batches of 50.
 
-A durable deployment mode (SQLite job queue, separate worker, rootless Docker sandbox) is prepared but not deployed. See [deploy/README.md](deploy/README.md).
+A durable deployment mode (SQLite job queue, separate worker, rootless Docker sandbox) is prepared; live GitHub deployment is not yet complete. See [deploy/README.md](deploy/README.md).
 
 ## Why I built it this way
 
@@ -106,13 +106,13 @@ Next is deploying it behind the rootless Docker sandbox designed in `deploy/`.
 
 ## Limits
 
-- **Small Python ruleset.** 15 service-owned rules. It is not a full security audit or proof that code is safe, and pattern matches can need human review. No dependency, secret, JavaScript or infrastructure scanning.
+- **Focused Python ruleset.** 15 service-owned rules for high-signal Python patterns: weak hashes, unsafe YAML and pickle loading, shell commands, `eval`/`exec`, disabled TLS verification, insecure randomness and temp files, and unsafe tar extraction. Findings are review aids, not a security audit or proof that code is safe. Pair it with [sca-triage](https://github.com/lansiquo/sca-triage) for npm dependencies and with dedicated tools for secrets, JavaScript and infrastructure.
 - **Pre-existing means untouched, not unrelated.** A change elsewhere, such as a new import, can make an untouched line match, and that finding is still labelled pre-existing.
 - **Size limits fail closed.** Up to a 1 MiB webhook body, a 25 MiB compressed archive, 100 MiB extracted, 10,000 archive members and 3,000 changed files. Larger pull requests fail closed.
-- **Local mode is not a deployment.** It runs two concurrent in-memory jobs. The durable mode's guarantees and limits are in the [deployment guide](deploy/README.md).
-- **No end-to-end deadline.** Semgrep has a timeout, and HTTP timeouts are per request, not a total deadline.
+- **Local mode runs jobs in memory.** Up to two scans run at once and nothing is persisted. The durable mode's guarantees and limits are in the [deployment guide](deploy/README.md).
+- **Per-step timeouts.** Semgrep has a timeout and each HTTP request has one; there is no single end-to-end deadline.
 - **Not an OS sandbox when run locally.** Credentials are removed from the scanner's environment and only the selected files are staged, but use a separate unprivileged worker with CPU, memory and disk limits and no network egress before scanning hostile public repositories.
-- **Known dependency findings.** The original local demo environment has them. Use the audited service lock in `deploy/` for deployments.
+- **Use the audited service lock for deployments.** `requirements.txt` sets up the developer and demo environment, which has known dependency advisories; `deploy/requirements-service.lock` is the audited service environment.
 
 See [SECURITY.md](SECURITY.md) for the trust boundaries and remaining risks.
 
@@ -156,10 +156,10 @@ worker.py, job_store.py      durable mode (SQLite queue, separate worker)
 demo.py                      offline demo (make demo)
 demo_web.py, demo/           local interactive showcase
 tests/                       offline regression suite (make test)
-deploy/                      prepared deployment design and evidence (not deployed)
-rules/                       early starter rules from 2025, not used by the service
+deploy/                      prepared deployment design, runbooks and evidence
+rules/                       early starter rules, not used by the service
 .github/workflows/ci.yml     runs make check on every pull request and push to main
-.github/branch-protection/   historical examples, not applied
+.github/branch-protect*/     earlier branch-protection and workflow examples, not applied
 ```
 
 Write-up: [dotrobin.dev/sast-triage](https://dotrobin.dev/sast-triage.html)

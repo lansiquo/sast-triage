@@ -68,5 +68,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Resolved hanging checks by aligning the required context to the workflow/job name and ensuring the
   job always completes (timeouts + `semgrep ci`).
-
-#### I came through a merge
