@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `conftest.py` is ranked as runtime code, even inside a `tests` folder. pytest imports it on every run, so high-severity findings in it are P1, not P2.
 
 ### Fixed
+- A changed file in a `test`, `tests`, `vendor`, `build`, `dist` or `node_modules` folder failed the scan as incomplete. With no `.semgrepignore` in the staged copy, Semgrep fell back to built-in ignore defaults and skipped those folders. The runner now writes an empty, service-owned `.semgrepignore` so every staged file is scanned.
 - CI runs `make check` on Python 3.11, 3.12, 3.13 and 3.14 (it ran 3.12 only). The README explains why the development environment resolves to Semgrep 1.79.0.
 - `rules/security.yaml` loads in Semgrep. Several patterns needed quoting, the `dangerouslySetInnerHTML` pattern was invalid JSX, and the unpinned-actions rule could never match; it now flags remote actions whose ref is not a full commit SHA. A test scans each rule pack in `rules/`.
 - Durable mode: a permanent GitHub error during a scan (HTTP 400, 401, 403, 404, 405, 410 or 422) now completes the Check Run as failure, with the status in its summary. It used to leave the Check in progress forever while the job was marked failed.

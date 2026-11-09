@@ -128,6 +128,10 @@ def run_semgrep(
             destination = stage_root / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
+        # Without a .semgrepignore, Semgrep applies built-in defaults that skip
+        # test/, tests/, vendor/, build/, dist/ and more, so a requested file
+        # there would go unscanned. Every staged file was chosen; ignore none.
+        (stage_root / ".semgrepignore").write_text("")
         env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "LANG", "LC_ALL") if key in os.environ}
         env.update({"HOME": stage, "SEMGREP_SETTINGS_FILE": str(stage_root / "settings.yml"),
                     "SEMGREP_ENABLE_VERSION_CHECK": "0", "SEMGREP_SEND_METRICS": "off",

@@ -19,7 +19,7 @@ python -m pip install -r requirements.txt
 ```
 
 ```bash
-make test     # offline regression suite (159 tests), outbound HTTP blocked
+make test     # offline regression suite (160 tests), outbound HTTP blocked
 make demo     # real Semgrep on local fixtures; prints triage and annotation JSON
 make check    # test, then demo
 ```

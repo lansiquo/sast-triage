@@ -227,7 +227,7 @@ for name in ('GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_PRIVATE_KEY_PATH',
              'EXPLICIT_INSTALLATION_TOKEN', 'GITHUB_TOKEN', 'GH_TOKEN', 'SEMGREP_APP_TOKEN'):
     assert name not in os.environ
 assert not Path('.env').exists()
-assert not Path('.semgrepignore').exists()
+assert Path('.semgrepignore').read_text() == ''   # service-owned and empty, never the PR's
 assert not Path('.semgrep.yaml').exists()
 assert Path('main.py').read_text() == 'print(1)'
 assert Path(os.environ['HOME']).resolve() == Path.cwd()
