@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The pull request's head commit is downloaded from the base repository, which holds every PR head commit. Downloading it from a fork failed for private or deleted forks, because durable mode scopes the installation token to the base repository.
 
 ### Changed
+- Branch protection lives in `docs/branch-protection/`: `protection.json` and a README with the `gh api` command that applies it. The required check is now `PRSecurityScan`, the App's default Check Run name, and the review settings are nested under `required_pull_request_reviews`; they were top-level keys next to a null value, so applying the old file would have turned off required reviews. The workflow, CODEOWNERS and pull request templates under `.github/branch-protect/` and `.github/branch-protection/` are removed: GitHub never ran them, the workflow used actions pinned to tags rather than commit SHAs, and they named a check (`RobinSec`) that nothing reports. The 1.0.0 notes no longer mention `make protect`, which that release did not include.
 - The webhook app loads `.env` only when `PRSEC_LOAD_DOTENV=1`. `make serve` sets it, so the documented local flow is unchanged; starting the app any other way no longer reads a `.env` from the working directory. Durable deployments already set `PRSEC_LOAD_DOTENV=0`.
 - The webhook app no longer serves `/docs`, `/redoc` or `/openapi.json`.
 - The test suite has 159 tests instead of 286, and line and branch coverage of the service code rose from 86% to 95%. Table tests now run their cases in a loop inside one test, and the showcase rule checks share one Semgrep scan; no case was dropped. New tests cover fail-closed paths that had none: scan-slot release when setup fails, scope and queue-full responses, readiness, token and App key handling, archive and file-list limits, scanner configuration and output checks, the Docker sandbox preflight, worker scope, and the queue and deployment check tools.
@@ -46,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Repository foundations: `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`.
 - **Makefile** targets: `setup`, `lint`, `test`, `scan`, `protect`, `unprotect`, `release`.
-- **Branch protection config** (`.github/branch-protection/protection.json`) and `make protect` to apply it.
+- **Branch protection config** (`.github/branch-protection/protection.json`).
 - **CODEOWNERS** for future review routing.
 
 ### Changed

@@ -86,6 +86,7 @@ Steps through ten OWASP Top 10:2025 examples: four run real Semgrep scans, six r
 | `demo_web.py`, `demo/` | Local interactive showcase |
 | `tests/` | Offline regression suite (`make test`) |
 | `deploy/` | Prepared deployment design, runbooks and evidence |
+| `docs/branch-protection/` | Branch protection that makes the check required, for a repository that uses the App |
 | `.github/workflows/ci.yml` | Runs `make check` on every pull request and push to main |
 
 ## Scope and limits
