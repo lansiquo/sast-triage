@@ -26,15 +26,24 @@ make selfcheck  # full-repository scan of a three-file fixture; passes when its 
 make check      # test, then selfcheck (what CI runs)
 ```
 
-To scan a whole repository, run `scan_repo.py` on its folder (see the NodeGoat example below):
+## Use it on your project
+
+After the Quick start setup, point `scan_repo.py` at any project folder. It reads the source files only: nothing is run or installed, and no GitHub account, token or network is needed.
 
 ```bash
-.venv/bin/python scan_repo.py path/to/project          # report; add --json for machine-readable output
+.venv/bin/python scan_repo.py /path/to/project          # ranked findings and the gate
+.venv/bin/python scan_repo.py /path/to/project --json   # the same, as JSON
 ```
 
-It scans every Python, JavaScript and TypeScript file except those in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv folders, and minified `*.min.js` files. There is no diff, so every finding counts as new. The exit status is 1 when the gate fails (a new P1), 0 when it passes and 2 on a usage or scanner error. The project is only parsed, never run or installed, and its own Semgrep rules and ignore files are not used.
+```text
+scan_repo.py DIRECTORY [--json] [--timeout SECONDS]
+```
 
-To run the webhook service against a GitHub App:
+It scans every Python, JavaScript and TypeScript file except those in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv folders, and minified `*.min.js` files. The project's own Semgrep rules and ignore files are not used. There is no diff, so every finding counts as new: on an existing codebase, findings that were already there also count. The exit status is 1 when the gate fails (a new P1), 0 when it passes and 2 on a usage or scanner error. `--timeout` limits the scan (default 300 seconds).
+
+### Review pull requests with a GitHub App
+
+To label only what each pull request changes, run the webhook service against your own GitHub App:
 
 ```bash
 cp .env.example .env   # set GITHUB_WEBHOOK_SECRET, GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY_PATH
