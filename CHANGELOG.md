@@ -4,6 +4,10 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Changed
+- `requirements.txt` pins `semgrep==1.79.0`, as `requirements-cli.txt` already did. It used to resolve to 1.79.0 only because newer Semgrep conflicts with FastAPI.
+
 ## [2.0.0] - 2026-11-09
 Upgrading from 1.0.0: the app reads `.env` only when `PRSEC_LOAD_DOTENV=1` (`make serve` sets it); the scanner accepts only one local rule file, so registry IDs, `auto` and URLs fail the scan; the demo and the `/docs`, `/redoc` and `/openapi.json` endpoints are removed.
 

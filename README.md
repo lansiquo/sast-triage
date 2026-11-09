@@ -204,7 +204,7 @@ only a complete scan can pass.
 ## Review pull requests with a GitHub App
 
 The webhook service scans each pull request's head commit and reports the result as a Check Run, with up
-to 200 annotations, P1 first. It needs the full `requirements.txt`, which resolves to Semgrep 1.79.0:
+to 200 annotations, P1 first. It needs the full `requirements.txt`, which pins Semgrep 1.79.0:
 newer Semgrep pins `opentelemetry-api` below the version current FastAPI needs, and forcing it would also
 pull in `mcp` and `opentelemetry-api` releases with known advisories.
 

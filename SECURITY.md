@@ -21,7 +21,7 @@ sast-triage runs from the command line and as a GitHub Action. The GitHub App se
 
 ## Durable mode and dependencies
 
-Durable mode scopes jobs and tokens to one repository, persists Checks, and requires a rootless Docker scanner; gates are in [deploy/README.md](deploy/README.md). `requirements.txt` and `requirements-cli.txt` resolve to Semgrep 1.79.0, and pip-audit reports no known vulnerabilities in either. The newest Semgrep tested, 1.182.1, pins MCP and OpenTelemetry releases with five known advisories, so it is not used. No host or credentials have been provisioned.
+Durable mode scopes jobs and tokens to one repository, persists Checks, and requires a rootless Docker scanner; gates are in [deploy/README.md](deploy/README.md). `requirements.txt` and `requirements-cli.txt` pin Semgrep 1.79.0, and pip-audit reports no known vulnerabilities in either. The newest Semgrep tested, 1.182.1, pins MCP and OpenTelemetry releases with five known advisories, so it is not used. No host or credentials have been provisioned.
 
 ## Reporting a vulnerability
 
