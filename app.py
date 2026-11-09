@@ -35,7 +35,7 @@ os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
 # --- analyzers (our runner) ---
 from analyzers.semgrep_runner import run_semgrep, to_github_annotations, summarize_findings
-from analyzers.triage import changed_lines, gate, triage
+from analyzers.triage import changed_lines, gate, is_source_path, triage
 
 # PyJWT optional
 try:
@@ -411,12 +411,13 @@ def run_semgrep_pipeline(
                 candidate = repo_root / name
                 if Path(name).is_absolute() or not candidate.resolve().is_relative_to(repo_root.resolve()):
                     raise RuntimeError("Unsafe changed-file path")
-            existing = [p for p in changed if p.endswith('.py')]
+            existing = [p for p in changed if is_source_path(p)]
             if any(not (repo_root / p).is_file() for p in existing):
-                raise RuntimeError('Changed Python file is missing from the commit snapshot')
+                raise RuntimeError('Changed source file is missing from the commit snapshot')
             if not existing:
                 conclusion = "neutral"
-                summary = "No supported changed Python files to scan (deleted files are excluded)."
+                summary = ("No supported changed Python, JavaScript or TypeScript files to scan "
+                           "(deleted files are excluded).")
                 return
             offline_yaml = tdp / "trusted-rules.yaml"
             offline_yaml.write_text(OFFLINE_RULESET)

@@ -1,8 +1,10 @@
 """Triage: which findings a pull request introduced, and how urgent they are. Offline only."""
+import pytest
+
 import app
 from analyzers import semgrep_runner as runner
 from analyzers.semgrep_runner import summarize_findings, to_github_annotations
-from analyzers.triage import added_lines, changed_lines, gate, is_test_path, priority, triage
+from analyzers.triage import added_lines, changed_lines, gate, is_source_path, is_test_path, priority, triage
 
 # Two hunks: line 2 changed, line 3 added, then line 22 changed further down.
 PATCH = """@@ -1,4 +1,5 @@
@@ -121,8 +123,62 @@ def test_test_code_follows_pytest_and_django_naming():
         assert is_test_path(path), path
     # Everything else, conftest.py included, is runtime code.
     for path in ['app.py', 'testing_utils.py', 'contest.py', 'latest.py', 'attestations/sign.py',
-                 'conftest.py', 'tests/conftest.py', 'pkg/test/conftest.py']:
+                 'conftest.py', 'tests/conftest.py', 'pkg/test/conftest.py',
+                 # JavaScript conventions do not apply to Python files.
+                 'spec/helpers.py', 'specs/run.py', 'e2e/run.py', '__tests__/x.py', 'cypress/x.py', 'api.test.py']:
         assert not is_test_path(path), path
+
+
+def test_test_code_follows_javascript_naming():
+    for path in ['__tests__/api.js', 'src/__tests__/Button.tsx', 'spec/user.js', 'specs/a.ts', 'e2e/login.ts',
+                 'cypress/support/commands.js', 'src/api.test.js', 'src/Button.spec.tsx', 'lib/x.test.mjs',
+                 'lib/x.spec.cjs', 'ui/App.test.jsx', 'test/e2e/integration/login_spec.js', 'tests/a.cjs',
+                 'test_helpers.js']:
+        assert is_test_path(path), path
+    for path in ['src/app.js', 'src/testing.js', 'src/contest.ts', 'src/latest.jsx', 'test.js', 'spec.ts',
+                 'src/attest.ts', 'src/inspect.js', 'src/test-utils.js', 'specification/a.js', 'e2e.js']:
+        assert not is_test_path(path), path
+
+
+def test_only_python_javascript_and_typescript_files_are_scanned():
+    for path in ['app.py', 'a.js', 'b.jsx', 'c.mjs', 'd.cjs', 'e.ts', 'f.tsx', 'types.d.ts', 'src/deep/g.js']:
+        assert is_source_path(path), path
+    for path in ['README.md', 'styles.css', 'package.json', 'app.pyc', 'page.html', 'a.JS', 'script.sh', 'js', '.py.bak']:
+        assert not is_source_path(path), path
+
+
+def test_pipeline_scans_changed_javascript_and_typescript_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, 'MODE', 'local')
+    for name in ('app.js', 'src/view.tsx', 'api.py', 'README.md', 'styles.css'):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text('x\n')
+    monkeypatch.setattr(app, 'download_tarball', lambda *a: tmp_path)
+    monkeypatch.setattr(app, 'list_changed_files', lambda *a: dict.fromkeys(
+        ['app.js', 'src/view.tsx', 'api.py', 'README.md', 'styles.css']))
+    scanned = []
+    monkeypatch.setattr(app, 'run_semgrep', lambda **k: scanned.append(k['paths']) or [finding('app.js', 1)])
+    completed = []
+    monkeypatch.setattr(app, 'complete_check_run', lambda *a: completed.append(a))
+    app.run_semgrep_pipeline('o', 'r', 'o', 'r', 1, 'a' * 40, 1, 'o', 'r', 99, 'fake')
+    assert scanned == [['app.js', 'src/view.tsx', 'api.py']]
+    assert completed[0][3] == 'failure' and '`app.js:1`' in completed[0][5]
+
+
+def test_pipeline_without_supported_files_is_neutral_and_missing_sources_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, 'MODE', 'local')
+    monkeypatch.setattr(app, 'run_semgrep', lambda **k: pytest.fail('must not scan'))
+    monkeypatch.setattr(app, 'download_tarball', lambda *a: tmp_path)
+    (tmp_path / 'README.md').write_text('x\n')
+    for changed, conclusion, summary in [
+        (['README.md', 'package.json'], 'neutral', 'No supported changed Python, JavaScript or TypeScript files'),
+        (['README.md', 'gone.ts'], 'failure', 'Scan incomplete'),          # listed as changed, absent from the snapshot
+        (['../outside.js'], 'failure', 'Scan incomplete'),                 # path escapes the snapshot
+    ]:
+        completed = []
+        monkeypatch.setattr(app, 'list_changed_files', lambda *a, _c=changed: dict.fromkeys(_c))
+        monkeypatch.setattr(app, 'complete_check_run', lambda *a: completed.append(a))
+        app.run_semgrep_pipeline('o', 'r', 'o', 'r', 1, 'a' * 40, 1, 'o', 'r', 99, 'fake')
+        assert (completed[0][3], completed[0][5][:len(summary)]) == (conclusion, summary), changed
 
 
 def test_priority_mirrors_sca_triage_and_low_ratings_drop_one_level():

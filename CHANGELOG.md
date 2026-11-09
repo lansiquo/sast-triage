@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **JavaScript and TypeScript.** Pull requests that change `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts` or `.tsx` files are scanned with 14 new service-owned rules (29 in all) for Node and Express: `eval`, the `Function` constructor and string timers, `vm` with dynamic code, `child_process` `exec`/`execSync` with a built command, `node-serialize`, md5/sha1 hashes, `Math.random()` for secrets, disabled TLS verification, cookies without `httpOnly` or `secure`, disabled template autoescaping, MongoDB `$where` and queries taken from `req.*`, open redirects and hard-coded session secrets. Each rule has positive and negative examples in `tests/test_trusted_rules.py`.
+- Test code also follows JavaScript naming for JavaScript and TypeScript files: a `__tests__`, `spec`, `specs`, `e2e` or `cypress` folder, or a `*.test.*` or `*.spec.*` name. Python files are ranked as before.
+
 ### Security
 - The diff reader splits a patch on `\n` only. It used `str.splitlines()`, which also breaks on form feeds, U+2028 and other characters that are legal in Python comments, so a pull request could shift the recorded line numbers and get a new P1 finding labelled pre-existing. Each hunk must also hold exactly the old and new line counts its header declares; any mismatch makes the file's changes unknown, so every finding in it counts as new.
 - A file moved from test code to runtime code counts as entirely new, with or without edits. A pure rename used to make every finding in it pre-existing, so moving high-severity code out of `tests/` raised it to P1 without failing the check.

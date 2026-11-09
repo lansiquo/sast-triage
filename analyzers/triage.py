@@ -14,6 +14,20 @@ from typing import Any, Dict, List, Optional, Set
 HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 
+# File types the service-owned rules cover. Everything else is never staged.
+PYTHON_EXTENSIONS = (".py",)
+JAVASCRIPT_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
+SOURCE_EXTENSIONS = PYTHON_EXTENSIONS + JAVASCRIPT_EXTENSIONS
+
+# Jest, Mocha, Jasmine, Cypress and Playwright folders; applied to JavaScript
+# and TypeScript files only, so Python results do not change.
+JAVASCRIPT_TEST_FOLDERS = {"__tests__", "spec", "specs", "e2e", "cypress"}
+
+
+def is_source_path(path: str) -> bool:
+    """A Python, JavaScript or TypeScript file: the only files that are scanned."""
+    return path.endswith(SOURCE_EXTENSIONS)
+
 
 def added_lines(patch: Optional[str]) -> Optional[Set[int]]:
     """Return the line numbers (in the new file) that a unified diff adds or changes.
@@ -95,7 +109,14 @@ def changed_lines(entry: Dict[str, Any]) -> Optional[Set[int]]:
 
 
 def is_test_path(path: str) -> bool:
-    """pytest and Django naming: a test/tests folder, test_*.py, *_test.py or tests.py.
+    """Test code by Python and JavaScript naming conventions.
+
+    Any file: a test/tests folder or a test_* name. Python (pytest and Django)
+    also: *_test.py and tests.py. JavaScript and TypeScript (Jest, Mocha,
+    Jasmine, Cypress, Playwright) also: a __tests__, spec, specs, e2e or
+    cypress folder, or a *.test.* or *.spec.* name such as api.test.js or
+    button.spec.tsx. The JavaScript conventions apply to JavaScript and
+    TypeScript files only, so a Python file in a spec folder stays runtime code.
 
     conftest.py is never test code, even in a tests folder: pytest imports it
     as a plugin on every run, before any test is selected, so it is ranked
@@ -104,8 +125,14 @@ def is_test_path(path: str) -> bool:
     *folders, name = PurePosixPath(path).parts
     if name == "conftest.py":
         return False
-    return (any(folder in {"test", "tests"} for folder in folders)
-            or name.startswith("test_") or name.endswith("_test.py") or name == "tests.py")
+    if (any(folder in {"test", "tests"} for folder in folders)
+            or name.startswith("test_") or name.endswith("_test.py") or name == "tests.py"):
+        return True
+    if name.endswith(JAVASCRIPT_EXTENSIONS):
+        parts = name.split(".")
+        return (any(folder in JAVASCRIPT_TEST_FOLDERS for folder in folders)
+                or (len(parts) > 2 and parts[-2] in {"test", "spec"}))
+    return False
 
 
 # P1: high/critical in runtime code. Fix before merging.
