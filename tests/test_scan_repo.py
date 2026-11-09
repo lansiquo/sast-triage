@@ -71,6 +71,7 @@ def test_text_report_matches_the_pull_request_summary(tmp_path, capsys):
     assert '  [P1, new] server.js:2  js-dangerous-eval' in out
     assert '  [P2, new] test/routes.test.js:1  js-dangerous-eval' in out
     assert '**Gate: FAIL** — 2 new P1 findings:' in out and '| P2 | 2 | 0 |' in out
+    assert 'New: every finding in a full scan.' in out and 'this pull request' not in out
 
 
 def test_exit_status_is_zero_when_the_gate_passes(tmp_path, capsys):

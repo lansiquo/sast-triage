@@ -48,7 +48,10 @@ def print_summary(title, findings, conclusion):
     for f in findings:
         label = 'new' if f['new'] else 'pre-existing'
         print(f"  [{f['priority']}, {label}] {f['path']}:{f['start_line']}  {f['rule_id']}")
-    print(summarize_findings(findings)[1])
+    # A full scan has no pull request, so every finding is new; say that instead of the PR wording.
+    print(summarize_findings(findings)[1].replace(
+        'New: on lines this pull request added or changed.',
+        'New: every finding in a full scan.'))
 
 
 def main(argv=None):
