@@ -168,6 +168,7 @@ The durable mode and rootless Docker sandbox are prepared but not live. See [dep
 
 ## More
 
+- [ARCHITECTURE.md](ARCHITECTURE.md): components, execution modes, failure handling and security controls, with a diagram
 - [SECURITY.md](SECURITY.md): trust boundaries and remaining risks
 - [CONTRIBUTING.md](CONTRIBUTING.md): development setup
 - Write-up: [dotrobin.dev/sast-triage](https://dotrobin.dev/sast-triage.html)
