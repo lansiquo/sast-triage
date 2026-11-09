@@ -1,7 +1,6 @@
 """The optional rule packs in rules/ must load in Semgrep; a parse error voids the whole scan."""
 from pathlib import Path
 
-import pytest
 import yaml
 
 from analyzers.semgrep_runner import run_semgrep
@@ -33,21 +32,19 @@ def _scan(tmp_path, monkeypatch, pack, names=tuple(SAMPLES)):
     return run_semgrep(sorted(names), str(tmp_path), config=str(pack))
 
 
-def test_rule_packs_found():
+def test_every_rule_pack_is_valid_yaml_and_loads_in_semgrep(tmp_path, monkeypatch):
     assert {p.name for p in PACKS} >= {'security.yaml', 'rules.yaml', '.semgrep.yaml'}
-
-
-@pytest.mark.parametrize('pack', PACKS, ids=lambda p: p.name)
-def test_rule_pack_is_valid_yaml(pack):
-    rules = yaml.safe_load(pack.read_text())['rules']
-    assert rules and all({'id', 'message', 'severity', 'languages'} <= set(rule) for rule in rules)
-
-
-@pytest.mark.parametrize('pack', PACKS, ids=lambda p: p.name)
-def test_rule_pack_loads_in_semgrep(tmp_path, monkeypatch, pack):
-    # run_semgrep raises on any scanner error, including rule parse errors.
-    # Every pack has Python rules, so the Python sample is always a valid target.
-    _scan(tmp_path, monkeypatch, pack, names=('shell.py',))
+    for pack in PACKS:
+        rules = yaml.safe_load(pack.read_text())['rules']
+        assert rules and all({'id', 'message', 'severity', 'languages'} <= set(rule) for rule in rules), pack.name
+        # run_semgrep raises on any scanner error, including rule parse errors.
+        # Every pack has Python rules, so the Python sample is always a valid target.
+        workdir = tmp_path / pack.name
+        workdir.mkdir()
+        try:
+            _scan(workdir, monkeypatch, pack, names=('shell.py',))
+        except Exception as error:
+            raise AssertionError(f'{pack.name} did not load in Semgrep') from error
 
 
 def test_security_pack_matches(tmp_path, monkeypatch):

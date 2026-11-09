@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `conftest.py` is ranked as runtime code, even inside a `tests` folder. pytest imports it on every run, so high-severity findings in it are P1, not P2.
 
 ### Fixed
+- CI runs `make check` on Python 3.11, 3.12, 3.13 and 3.14 (it ran 3.12 only). The README explains why the development environment resolves to Semgrep 1.79.0.
 - `rules/security.yaml` loads in Semgrep. Several patterns needed quoting, the `dangerouslySetInnerHTML` pattern was invalid JSX, and the unpinned-actions rule could never match; it now flags remote actions whose ref is not a full commit SHA. A test scans each rule pack in `rules/`.
 - Durable mode: a permanent GitHub error during a scan (HTTP 400, 401, 403, 404, 405, 410 or 422) now completes the Check Run as failure, with the status in its summary. It used to leave the Check in progress forever while the job was marked failed.
 - The pull request's head commit is downloaded from the base repository, which holds every PR head commit. Downloading it from a fork failed for private or deleted forks, because durable mode scopes the installation token to the base repository.
@@ -18,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The webhook app loads `.env` only when `PRSEC_LOAD_DOTENV=1`. `make serve` sets it, so the documented local flow is unchanged; starting the app any other way no longer reads a `.env` from the working directory. Durable deployments already set `PRSEC_LOAD_DOTENV=0`.
 - The webhook app no longer serves `/docs`, `/redoc` or `/openapi.json`.
+- The test suite has 159 tests instead of 286, and line and branch coverage of the service code rose from 86% to 95%. Table tests now run their cases in a loop inside one test, and the showcase rule checks share one Semgrep scan; no case was dropped. New tests cover fail-closed paths that had none: scan-slot release when setup fails, scope and queue-full responses, readiness, token and App key handling, archive and file-list limits, scanner configuration and output checks, the Docker sandbox preflight, worker scope, and the queue and deployment check tools.
 - The demo now simulates one pull request across a runtime file and a test file, with five findings that cover every triage outcome: P1 new (fails), P1 pre-existing, P2 from medium severity in runtime code, P2 from high severity in test code, and P3 pre-existing.
 
 ## [1.0.0] - 2026-11-05

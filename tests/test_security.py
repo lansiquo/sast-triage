@@ -20,9 +20,11 @@ def post(body, secret='testsecret', signature=True, event='ping'):
     return TestClient(app.app).post('/webhook', content=body, headers=headers)
 
 
-@pytest.mark.parametrize('signature,secret', [(False, 'testsecret'), (True, 'wrong')])
-def test_reject_invalid_signature(signature, secret):
-    assert post(b'{}', secret, signature).status_code == 401
+def test_signature_must_match_a_configured_secret(monkeypatch):
+    for signature, secret in [(False, 'testsecret'), (True, 'wrong')]:
+        assert post(b'{}', secret, signature).status_code == 401, (signature, secret)
+    monkeypatch.setattr(app, 'SECRETS', ['old', 'new'])   # rotation: either configured secret is accepted
+    assert post(b'{}', secret='new').json() == {'ok': True, 'pong': True}
 
 
 def test_missing_secret_fails_closed(monkeypatch):
@@ -30,9 +32,9 @@ def test_missing_secret_fails_closed(monkeypatch):
     assert post(b'{}').status_code == 503
 
 
-@pytest.mark.parametrize('body', [b'{', b'[]', b'null', b'"text"'])
-def test_invalid_json(body):
-    assert post(body).status_code == 400
+def test_invalid_json():
+    for body in [b'{', b'[]', b'null', b'"text"']:
+        assert post(body).status_code == 400, body
 
 
 def test_webhook_size_limit(monkeypatch):
@@ -55,13 +57,19 @@ def archive(entries):
     return tarfile.open(fileobj=data)
 
 
-@pytest.mark.parametrize('name,kind', [('../escape', tarfile.REGTYPE), ('/absolute', tarfile.REGTYPE),
-    ('root/../../sibling/file', tarfile.REGTYPE), ('root/link', tarfile.SYMTYPE),
-    ('root/hardlink', tarfile.LNKTYPE), ('root/fifo', tarfile.FIFOTYPE),
-    ('root/../sibling/file', tarfile.REGTYPE), ('root\\file', tarfile.REGTYPE)])
-def test_unsafe_archive_rejected(tmp_path, name, kind):
-    with archive([(name, kind, b'x')]) as tf, pytest.raises(RuntimeError):
-        app._safe_extract_tar(tf, tmp_path)
+def test_unsafe_archive_rejected(tmp_path):
+    unsafe = [[(name, kind, b'x')] for name, kind in [
+        ('../escape', tarfile.REGTYPE), ('/absolute', tarfile.REGTYPE),
+        ('root/../../sibling/file', tarfile.REGTYPE), ('root/link', tarfile.SYMTYPE),
+        ('root/hardlink', tarfile.LNKTYPE), ('root/fifo', tarfile.FIFOTYPE),
+        ('root/../sibling/file', tarfile.REGTYPE), ('root\\file', tarfile.REGTYPE)]]
+    unsafe.append([('root/a', tarfile.REGTYPE, b'a')] * 2)   # duplicate path
+    for index, entries in enumerate(unsafe):
+        destination = tmp_path / f'case{index}'
+        destination.mkdir()
+        with archive(entries) as tf, pytest.raises(RuntimeError):
+            app._safe_extract_tar(tf, destination)
+            pytest.fail(f'accepted {entries!r}')
 
 
 def test_archive_normal_file(tmp_path):
@@ -70,16 +78,15 @@ def test_archive_normal_file(tmp_path):
     assert (tmp_path / 'root/main.py').read_bytes() == b'print(1)'
 
 
-@pytest.mark.parametrize('limit,value', [('MAX_EXTRACTED_BYTES', 1), ('MAX_ARCHIVE_MEMBERS', 0)])
-def test_archive_limits(tmp_path, monkeypatch, limit, value):
-    monkeypatch.setattr(app, limit, value)
-    with archive([('root/main.py', tarfile.REGTYPE, b'xx')]) as tf, pytest.raises(RuntimeError):
-        app._safe_extract_tar(tf, tmp_path)
-
-
-def test_duplicate_archive_path(tmp_path):
-    with archive([('root/a', tarfile.REGTYPE, b'a')] * 2) as tf, pytest.raises(RuntimeError):
-        app._safe_extract_tar(tf, tmp_path)
+def test_archive_limits(tmp_path, monkeypatch):
+    for limit, value in [('MAX_EXTRACTED_BYTES', 1), ('MAX_ARCHIVE_MEMBERS', 0)]:
+        destination = tmp_path / limit
+        destination.mkdir()
+        with monkeypatch.context() as m:
+            m.setattr(app, limit, value)
+            with archive([('root/main.py', tarfile.REGTYPE, b'xx')]) as tf, pytest.raises(RuntimeError):
+                app._safe_extract_tar(tf, destination)
+                pytest.fail(f'{limit} not enforced')
 
 
 def test_pipeline_failure_is_not_success(monkeypatch, tmp_path):
@@ -96,33 +103,39 @@ def test_pipeline_failure_is_not_success(monkeypatch, tmp_path):
     assert 'incomplete' in completed[0][5]
 
 
-@pytest.mark.parametrize('result', [subprocess.CompletedProcess([], -9, '{}', ''),
-    subprocess.CompletedProcess([], 2, '{}', ''), subprocess.CompletedProcess([], 0, 'not-json', ''),
-    subprocess.CompletedProcess([], 0, '{"results": [], "errors": [{"message": "parse error"}]}', '')])
-def test_scanner_failure(tmp_path, monkeypatch, result):
+def test_scanner_failure(tmp_path, monkeypatch):
     (tmp_path / 'main.py').write_text('print(1)')
     monkeypatch.setattr(runner, '_ensure_semgrep_available', lambda: '/fake/semgrep')
-    monkeypatch.setattr(runner, '_bounded_container_run', lambda *a, **k: result)
-    with pytest.raises(runner.SemgrepInvocationError):
-        runner.run_semgrep(['main.py'], str(tmp_path), config='/trusted/rules.yml')
+    for result, reason in [(subprocess.CompletedProcess([], -9, '{}', ''), None),
+                   (subprocess.CompletedProcess([], 2, '{}', ''), None),
+                   (subprocess.CompletedProcess([], 0, 'not-json', ''), None),
+                   (subprocess.CompletedProcess([], 0, '{"results": [], "errors": [{"message": "parse error"}]}', ''), None),
+                   # A scan that skipped the requested file cannot pass as clean.
+                   (subprocess.CompletedProcess([], 0, '{"results": [], "errors": [], "paths": {"scanned": []}}', ''), 'skipped')]:
+        with monkeypatch.context() as m:
+            m.setattr(runner, '_bounded_container_run', lambda *a, **k: result)
+            with pytest.raises(runner.SemgrepInvocationError, match=reason):
+                runner.run_semgrep(['main.py'], str(tmp_path), config='/trusted/rules.yml')
+                pytest.fail(f'accepted {result}')
 
 
-@pytest.mark.parametrize('path', ['../outside.py', '/tmp/outside.py'])
-def test_scan_path_boundary(tmp_path, monkeypatch, path):
+def test_scan_path_boundary(tmp_path, monkeypatch):
+    outside = tmp_path / 'private.txt'
+    outside.write_text('test-only-private-data')
+    root = tmp_path / 'repo'
+    root.mkdir()
+    (root / 'source.py').symlink_to(outside)   # a symlinked source must not reach outside the repo
     monkeypatch.setattr(runner, '_ensure_semgrep_available', lambda: '/fake/semgrep')
-    with pytest.raises(ValueError):
-        runner.run_semgrep([path], str(tmp_path), config='/trusted/rules.yml')
+    for path in ['../outside.py', '/tmp/outside.py', 'source.py']:
+        with pytest.raises(ValueError, match='Unsafe scan path'):
+            runner.run_semgrep([path], str(root), config='/trusted/rules.yml')
+            pytest.fail(f'accepted {path}')
 
-@pytest.mark.parametrize('owner,sha', [('owner/../../other', 'a' * 40), ('owner', 'not-a-sha')])
-def test_invalid_pr_identifiers(owner, sha):
-    side = {'sha': sha, 'repo': {'owner': {'login': owner}, 'name': 'repo'}}
-    payload = {'action': 'opened', 'number': 1, 'pull_request': {'head': side, 'base': side}}
-    assert post(json.dumps(payload).encode(), event='pull_request').status_code == 400
-
-
-def test_rotated_secret(monkeypatch):
-    monkeypatch.setattr(app, 'SECRETS', ['old', 'new'])
-    assert post(b'{}', secret='new').json() == {'ok': True, 'pong': True}
+def test_invalid_pr_identifiers():
+    for owner, sha in [('owner/../../other', 'a' * 40), ('owner', 'not-a-sha')]:
+        side = {'sha': sha, 'repo': {'owner': {'login': owner}, 'name': 'repo'}}
+        payload = {'action': 'opened', 'number': 1, 'pull_request': {'head': side, 'base': side}}
+        assert post(json.dumps(payload).encode(), event='pull_request').status_code == 400, (owner, sha)
 
 
 def test_download_limit_closes_response(tmp_path, monkeypatch):
@@ -190,28 +203,11 @@ def test_semgrep_prefers_matching_python_environment(tmp_path, monkeypatch):
     assert runner._ensure_semgrep_available() == str(executable)
 
 
-def test_skipped_source_cannot_pass(tmp_path, monkeypatch):
-    (tmp_path / 'main.py').write_text('print(1)')
-    monkeypatch.setattr(runner, '_ensure_semgrep_available', lambda: '/fake/semgrep')
-    monkeypatch.setattr(runner, '_bounded_container_run', lambda *a, **k:
-        subprocess.CompletedProcess([], 0, '{"results": [], "errors": [], "paths": {"scanned": []}}', ''))
-    with pytest.raises(runner.SemgrepInvocationError, match='skipped'):
-        runner.run_semgrep(['main.py'], str(tmp_path), config='/trusted/rules.yml')
-
-
 def test_oversized_source_rejected_before_scanner(tmp_path, monkeypatch):
     (tmp_path / 'large.py').write_bytes(b'x' * (1024 * 1024 + 1))
     monkeypatch.setattr(runner, '_ensure_semgrep_available', lambda: '/fake/semgrep')
     with pytest.raises(ValueError, match='1 MiB'):
         runner.run_semgrep(['large.py'], str(tmp_path), config='/trusted/rules.yml')
-
-
-def test_scanner_cannot_access_outside_symlink(tmp_path, monkeypatch):
-    outside=tmp_path / 'private.txt';outside.write_text('test-only-private-data')
-    root=tmp_path / 'repo';root.mkdir();(root / 'source.py').symlink_to(outside)
-    monkeypatch.setattr(runner, '_ensure_semgrep_available', lambda: '/fake/semgrep')
-    with pytest.raises(ValueError, match='Unsafe scan path'):
-        runner.run_semgrep(['source.py'], str(root), config='/trusted/rules.yml')
 
 
 def test_real_scanner_process_gets_only_staged_source_and_safe_environment(tmp_path, monkeypatch):

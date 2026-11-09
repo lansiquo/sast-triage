@@ -8,7 +8,7 @@ It runs 15 service-owned rules for high-signal Python patterns. Rules, ignore fi
 
 ## Quick start
 
-Requires Python 3.11–3.13. The tests and demo need no GitHub account, token or network.
+Requires Python 3.11–3.14. `requirements.txt` resolves to Semgrep 1.79.0: newer Semgrep pins `opentelemetry-api` below the version current FastAPI needs, and forcing it would also pull in `mcp` and `opentelemetry-api` releases with known advisories. Set `SEMGREP_BIN` to use another Semgrep. The tests and demo need no GitHub account, token or network.
 
 ```bash
 git clone https://github.com/lansiquo/sast-triage.git
@@ -19,7 +19,7 @@ python -m pip install -r requirements.txt
 ```
 
 ```bash
-make test     # offline regression suite (286 tests), outbound HTTP blocked
+make test     # offline regression suite (159 tests), outbound HTTP blocked
 make demo     # real Semgrep on local fixtures; prints triage and annotation JSON
 make check    # test, then demo
 ```

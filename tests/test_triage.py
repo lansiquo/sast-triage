@@ -1,6 +1,4 @@
 """Triage: which findings a pull request introduced, and how urgent they are. Offline only."""
-import pytest
-
 import app
 from analyzers import semgrep_runner as runner
 from analyzers.semgrep_runner import summarize_findings, to_github_annotations
@@ -21,18 +19,20 @@ PATCH = """@@ -1,4 +1,5 @@
 \\ No newline at end of file"""
 
 
-def test_added_lines_reads_every_hunk():
-    assert added_lines(PATCH) == {2, 3, 22}
+ADDED_LINES = [
+    (PATCH, {2, 3, 22}),                                          # every hunk is read
+    ('@@ -0,0 +1,3 @@\n+a\n+b\n+c', {1, 2, 3}),                   # new file: all added
+    ('@@ -5,2 +5,1 @@\n keep\n-gone', set()),                      # deletions add nothing
+    ('@@ -1,2 +1,2 @@\r\n keep\r\n-x = 1\r\n+x = 2\r\n', {2}),     # CRLF rows read like LF
+    # Missing or unreadable patch: unknown.
+    (None, None), ('', None), (42, None), ('Binary files differ', None),
+    ('@@ broken @@\n+x', None), ('@@ -1 +1 @@\n*odd', None),
+]
 
 
-def test_new_file_is_all_added_and_deletions_add_nothing():
-    assert added_lines("@@ -0,0 +1,3 @@\n+a\n+b\n+c") == {1, 2, 3}
-    assert added_lines("@@ -5,2 +5,1 @@\n keep\n-gone") == set()
-
-
-@pytest.mark.parametrize('patch', [None, '', 42, 'Binary files differ', '@@ broken @@\n+x', '@@ -1 +1 @@\n*odd'])
-def test_missing_or_unreadable_patch_is_unknown(patch):
-    assert added_lines(patch) is None
+def test_added_lines():
+    for patch, expected in ADDED_LINES:
+        assert added_lines(patch) == expected, repr(patch)
 
 
 # Characters str.splitlines() treats as line breaks but Git, GitHub and Semgrep
@@ -40,61 +40,59 @@ def test_missing_or_unreadable_patch_is_unknown(patch):
 SPLITLINES_ONLY_BREAKS = ['\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\x85', ' ', ' ']
 
 
-@pytest.mark.parametrize('char', SPLITLINES_ONLY_BREAKS)
-def test_unicode_line_breaks_cannot_shift_a_new_finding_to_pre_existing(char):
+def test_unicode_line_breaks_cannot_shift_a_new_finding_to_pre_existing():
     # Line 2 adds a comment holding the character, line 3 the vulnerable call.
     # If the parser split on it, " x" would read as a context line and the
     # call would be recorded as line 4, leaving the finding on line 3 "pre-existing".
-    patch = f'@@ -1,2 +1,4 @@\n import os\n+# note{char} x\n+os.system(cmd)\n def f():'
-    assert added_lines(patch) == {2, 3}
-    ranked = triage([finding('app.py', 3)], {'app.py': added_lines(patch)})
-    assert ranked[0]['new'] and gate(ranked) == 'failure'
+    for char in SPLITLINES_ONLY_BREAKS:
+        patch = f'@@ -1,2 +1,4 @@\n import os\n+# note{char} x\n+os.system(cmd)\n def f():'
+        assert added_lines(patch) == {2, 3}, repr(char)
+        ranked = triage([finding('app.py', 3)], {'app.py': added_lines(patch)})
+        assert ranked[0]['new'] and gate(ranked) == 'failure', repr(char)
 
 
-def test_crlf_patch_rows_are_read_like_lf():
-    assert added_lines('@@ -1,2 +1,2 @@\r\n keep\r\n-x = 1\r\n+x = 2\r\n') == {2}
-
-
-@pytest.mark.parametrize('patch', [
+HEADER_MISMATCHES = [
     '@@ -1,2 +1,2 @@\n keep\n+extra\n+too many',          # more new lines than declared
     '@@ -1,3 +1,3 @@\n keep\n-x\n+y',                     # hunk ends early
     '@@ -1 +1 @@\n-x\n-y\n+z',                            # more old lines than declared
     '@@ -1,2 +1,2 @@\n a\n@@ -9 +9 @@\n-x\n+y',          # header before the previous hunk is complete
     '@@ -0,0 +1 @@\n+a\n+b',                              # omitted count means one line
-])
-def test_hunk_that_disagrees_with_its_header_is_unknown(patch):
-    assert added_lines(patch) is None
-    ranked = triage([finding('app.py', 50)], {'app.py': added_lines(patch)})
-    assert ranked[0]['new']
+]
 
 
-def test_pure_rename_has_no_changed_lines():
-    assert changed_lines({'filename': 'b.py', 'status': 'renamed', 'changes': 0}) == set()
-    assert changed_lines({'filename': 'b.py', 'status': 'renamed', 'changes': 1, 'patch': '@@ -1 +1 @@\n-x\n+y'}) == {1}
+def test_hunk_that_disagrees_with_its_header_is_unknown():
+    for patch in HEADER_MISMATCHES:
+        assert added_lines(patch) is None, repr(patch)
+        ranked = triage([finding('app.py', 50)], {'app.py': added_lines(patch)})
+        assert ranked[0]['new'], repr(patch)
 
 
-@pytest.mark.parametrize('status,changes,patch', [
-    ('renamed', 0, None),                          # moved without edits
-    ('renamed', 1, '@@ -5 +5 @@\n-x\n+y'),         # moved with a one-line edit
-    ('copied', 0, None),
-])
-def test_moving_test_code_into_runtime_code_counts_as_entirely_new(status, changes, patch):
-    entry = {'filename': 'app/loader.py', 'previous_filename': 'tests/loader.py',
-             'status': status, 'changes': changes, **({'patch': patch} if patch else {})}
-    assert changed_lines(entry) is None
-    # pickle.loads on untouched line 3 was P2 in tests/; in runtime code it is a new P1.
-    ranked = triage([finding('app/loader.py', 3)], {'app/loader.py': changed_lines(entry)})
-    assert (ranked[0]['priority'], ranked[0]['new']) == ('P1', True) and gate(ranked) == 'failure'
+def test_renames_keep_only_their_edited_lines():
+    cases = [
+        ({'filename': 'b.py', 'status': 'renamed', 'changes': 0}, set()),
+        ({'filename': 'b.py', 'status': 'renamed', 'changes': 1, 'patch': '@@ -1 +1 @@\n-x\n+y'}, {1}),
+        ({'previous_filename': 'app/old.py', 'filename': 'app/new.py'}, set()),         # runtime to runtime
+        ({'previous_filename': 'tests/old.py', 'filename': 'tests/new.py'}, set()),     # test to test
+        # Runtime to test lowers priority; nothing to re-flag.
+        ({'previous_filename': 'app/loader.py', 'filename': 'tests/loader.py'}, set()),
+    ]
+    for entry, expected in cases:
+        entry = {'status': 'renamed', 'changes': 0, **entry}
+        assert changed_lines(entry) == expected, entry
 
 
-@pytest.mark.parametrize('previous,filename', [
-    ('app/old.py', 'app/new.py'),         # runtime to runtime
-    ('tests/old.py', 'tests/new.py'),     # test to test
-    ('app/loader.py', 'tests/loader.py'), # runtime to test lowers priority; nothing to re-flag
-])
-def test_other_pure_renames_stay_unchanged(previous, filename):
-    assert changed_lines({'filename': filename, 'previous_filename': previous,
-                          'status': 'renamed', 'changes': 0}) == set()
+def test_moving_test_code_into_runtime_code_counts_as_entirely_new():
+    for status, changes, patch in [
+        ('renamed', 0, None),                          # moved without edits
+        ('renamed', 1, '@@ -5 +5 @@\n-x\n+y'),         # moved with a one-line edit
+        ('copied', 1, '@@ -5 +5 @@\n-x\n+y'),          # copied with an edit
+    ]:
+        entry = {'filename': 'app/loader.py', 'previous_filename': 'tests/loader.py',
+                 'status': status, 'changes': changes, **({'patch': patch} if patch else {})}
+        assert changed_lines(entry) is None, entry
+        # pickle.loads on untouched line 3 was P2 in tests/; in runtime code it is a new P1.
+        ranked = triage([finding('app/loader.py', 3)], {'app/loader.py': changed_lines(entry)})
+        assert (ranked[0]['priority'], ranked[0]['new']) == ('P1', True) and gate(ranked) == 'failure', entry
 
 
 def test_high_severity_in_conftest_fails_the_check():
@@ -118,33 +116,28 @@ def finding(path='app.py', line=1, end=None, severity='HIGH', **extra):
             'owasp': None, 'confidence': None, 'likelihood': None, **extra}
 
 
-@pytest.mark.parametrize('path', ['tests/test_api.py', 'pkg/test/helpers.py', 'test_api.py',
-                                  'api_test.py', 'shop/tests.py'])
-def test_test_code_follows_pytest_and_django_naming(path):
-    assert is_test_path(path)
+def test_test_code_follows_pytest_and_django_naming():
+    for path in ['tests/test_api.py', 'pkg/test/helpers.py', 'test_api.py', 'api_test.py', 'shop/tests.py']:
+        assert is_test_path(path), path
+    # Everything else, conftest.py included, is runtime code.
+    for path in ['app.py', 'testing_utils.py', 'contest.py', 'latest.py', 'attestations/sign.py',
+                 'conftest.py', 'tests/conftest.py', 'pkg/test/conftest.py']:
+        assert not is_test_path(path), path
 
 
-@pytest.mark.parametrize('path', ['app.py', 'testing_utils.py', 'contest.py', 'latest.py', 'attestations/sign.py',
-                                  'conftest.py', 'tests/conftest.py', 'pkg/test/conftest.py'])
-def test_everything_else_is_runtime_code(path):
-    assert not is_test_path(path)
-
-
-@pytest.mark.parametrize('severity,test_code,expected', [
-    ('CRITICAL', False, 'P1'), ('HIGH', False, 'P1'),
-    ('HIGH', True, 'P2'), ('MEDIUM', False, 'P2'),
-    ('MEDIUM', True, 'P3'), ('LOW', False, 'P3'), ('LOW', True, 'P3'),
-])
-def test_priority_mirrors_sca_triage(severity, test_code, expected):
-    assert priority(severity, test_code) == expected
-
-
-def test_low_rule_confidence_or_likelihood_drops_one_level():
-    assert priority('HIGH', False, confidence='LOW') == 'P2'
-    assert priority('HIGH', False, likelihood='LOW') == 'P2'
-    assert priority('MEDIUM', False, confidence='LOW') == 'P3'
-    assert priority('LOW', False, confidence='LOW') == 'P3'
-    assert priority('HIGH', False, confidence='HIGH', likelihood='MEDIUM') == 'P1'
+def test_priority_mirrors_sca_triage_and_low_ratings_drop_one_level():
+    for args, ratings, expected in [
+        (('CRITICAL', False), {}, 'P1'), (('HIGH', False), {}, 'P1'),
+        (('HIGH', True), {}, 'P2'), (('MEDIUM', False), {}, 'P2'),
+        (('MEDIUM', True), {}, 'P3'), (('LOW', False), {}, 'P3'), (('LOW', True), {}, 'P3'),
+        # A rule that rates its own confidence or likelihood LOW drops one level.
+        (('HIGH', False), {'confidence': 'LOW'}, 'P2'),
+        (('HIGH', False), {'likelihood': 'LOW'}, 'P2'),
+        (('MEDIUM', False), {'confidence': 'LOW'}, 'P3'),
+        (('LOW', False), {'confidence': 'LOW'}, 'P3'),
+        (('HIGH', False), {'confidence': 'HIGH', 'likelihood': 'MEDIUM'}, 'P1'),
+    ]:
+        assert priority(*args, **ratings) == expected, (args, ratings)
 
 
 def test_findings_on_changed_lines_are_new_and_the_rest_pre_existing():
@@ -171,10 +164,12 @@ def test_triage_sorts_p1_first_then_new_before_pre_existing():
 
 def test_annotations_show_priority_and_status():
     first, second = to_github_annotations(triage(
-        [finding('app.py', 8), finding('app.py', 2, confidence='LOW')], {'app.py': {8}}))
+        [finding('app.py', 8, cwe='CWE-78', owasp='A05:2025', fix='Pass a list'),
+         finding('app.py', 2, confidence='LOW')], {'app.py': {8}}))
     assert first['title'] == '[P1, new] Risk'
     assert 'Priority: P1 (high severity, runtime code)' in first['raw_details']
     assert 'Status: new' in first['raw_details']
+    assert all(line in first['raw_details'] for line in ('CWE: CWE-78', 'OWASP: A05:2025', 'Suggested fix: Pass a list'))
     assert second['title'] == '[P2, pre-existing] Risk'
     assert 'Rule confidence: LOW' in second['raw_details']
     assert 'did not change these lines' in second['raw_details']

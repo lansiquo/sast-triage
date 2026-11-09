@@ -19,10 +19,10 @@ def test_demo_serves_only_fixed_assets_and_fixtures(client):
     assert client.get('/api/fixtures', headers={'Host': 'evil.example'}).status_code == 400
 
 
-@pytest.mark.parametrize('headers', [{}, {'Origin': 'http://evil.example', 'X-PRSEC-Demo': '1'}, {'Origin': 'http://127.0.0.1'}])
-def test_cross_site_scan_rejected(client, headers, monkeypatch):
+def test_cross_site_scan_rejected(client, monkeypatch):
     monkeypatch.setattr(demo_web, 'run_semgrep', lambda *a, **k: pytest.fail('Scanner must not run'))
-    assert client.post('/api/scan/vulnerable', headers=headers).status_code == 403
+    for headers in [{}, {'Origin': 'http://evil.example', 'X-PRSEC-Demo': '1'}, {'Origin': 'http://127.0.0.1'}]:
+        assert client.post('/api/scan/vulnerable', headers=headers).status_code == 403, headers
 
 
 def test_demo_restricts_inputs_and_passes_only_trusted_rules(client, monkeypatch):

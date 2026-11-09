@@ -12,9 +12,10 @@ import app
 REPO = Path(__file__).resolve().parent.parent
 
 
-@pytest.mark.parametrize('path', ['/docs', '/redoc', '/openapi.json', '/docs/oauth2-redirect'])
-def test_webhook_app_publishes_no_schema_or_docs_ui(path):
-    assert TestClient(app.app).get(path).status_code == 404
+def test_webhook_app_publishes_no_schema_or_docs_ui():
+    client = TestClient(app.app)
+    for path in ['/docs', '/redoc', '/openapi.json', '/docs/oauth2-redirect']:
+        assert client.get(path).status_code == 404, path
 
 
 def secret_seen_by_fresh_import(tmp_path, **env):
@@ -27,11 +28,8 @@ def secret_seen_by_fresh_import(tmp_path, **env):
     return result.stdout.strip()
 
 
-def test_dotenv_in_working_directory_is_ignored_by_default(tmp_path):
+def test_dotenv_in_working_directory_is_loaded_only_when_explicitly_enabled(tmp_path):
     assert secret_seen_by_fresh_import(tmp_path) == ''
-
-
-def test_dotenv_is_loaded_when_explicitly_enabled(tmp_path):
     assert secret_seen_by_fresh_import(tmp_path, PRSEC_LOAD_DOTENV='1') == 'from-dotenv'
 
 

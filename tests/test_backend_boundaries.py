@@ -13,18 +13,20 @@ def response(status, **headers):
     return r
 
 
-@pytest.mark.parametrize('status,headers,minimum', [
-    (429, {'Retry-After': '900'}, 900),
-    (403, {'X-RateLimit-Remaining':'0', 'X-RateLimit-Reset':str(time.time()+1800)}, 1700),
-    (429, {'Retry-After':'not-a-date'}, 60),
-    (429, {'Retry-After':'inf'}, 60),
-])
-def test_api_rate_limit_becomes_safe_retry(monkeypatch, status, headers, minimum):
-    monkeypatch.setattr(app.requests, 'request', lambda *a, **k: response(status, **headers))
-    with pytest.raises(app.GitHubRateLimitError) as error:
-        app._get_json('https://api.github.com/example', 'fake')
-    assert error.value.retry_after >= minimum
-    assert 'private-response' not in str(error.value)
+def test_api_rate_limit_becomes_safe_retry(monkeypatch):
+    for status, headers, minimum in [
+        (429, {'Retry-After': '900'}, 900),
+        (403, {'X-RateLimit-Remaining':'0', 'X-RateLimit-Reset':str(time.time()+1800)}, 1700),
+        (429, {'Retry-After':'not-a-date'}, 60),
+        (429, {'Retry-After':'inf'}, 60),
+    ]:
+        with monkeypatch.context() as m:
+            m.setattr(app.requests, 'request', lambda *a, **k: response(status, **headers))
+            with pytest.raises(app.GitHubRateLimitError) as error:
+                app._get_json('https://api.github.com/example', 'fake')
+                pytest.fail(f'no rate limit for {status} {headers}')
+        assert error.value.retry_after >= minimum, (status, headers)
+        assert 'private-response' not in str(error.value), (status, headers)
 
 
 def test_rate_limit_pauses_all_jobs_and_survives_restart(tmp_path):
@@ -60,17 +62,19 @@ def test_pipeline_rate_limit_does_not_attempt_completion(monkeypatch):
     with pytest.raises(app.GitHubRateLimitError):pipeline()
 
 
-@pytest.mark.parametrize('last', [{'state':'closed','head':{'sha':'a'*40}}, {'state':'open','head':{'sha':'b'*40}}])
-def test_change_during_scan_cancels_result(tmp_path, monkeypatch, last):
+def test_close_or_new_commit_during_scan_cancels_result(tmp_path, monkeypatch):
     configure(monkeypatch);(tmp_path/'main.py').write_text('print(1)')
-    states=iter([{'head':{'sha':'a'*40}}]*2+[last])
-    monkeypatch.setattr(app,'_get_json',lambda *a,**k:next(states))
     monkeypatch.setattr(app,'download_tarball',lambda *a:tmp_path)
     monkeypatch.setattr(app,'list_changed_files',lambda *a:{'main.py':None})
-    scans=[]
-    monkeypatch.setattr(app,'run_semgrep',lambda **k:scans.append(k) or [])
-    completions=[];monkeypatch.setattr(app,'complete_check_run',lambda *a:completions.append(a))
-    pipeline();assert len(scans)==1 and completions[0][3]=='cancelled'
+    for last in [{'state':'closed','head':{'sha':'a'*40}}, {'state':'open','head':{'sha':'b'*40}}]:
+        states=iter([{'head':{'sha':'a'*40}}]*2+[last])
+        scans=[];completions=[]
+        with monkeypatch.context() as m:
+            m.setattr(app,'_get_json',lambda *a,**k:next(states))
+            m.setattr(app,'run_semgrep',lambda **k:scans.append(k) or [])
+            m.setattr(app,'complete_check_run',lambda *a:completions.append(a))
+            pipeline()
+        assert len(scans)==1 and completions[0][3]=='cancelled', last
 
 
 def test_missing_changed_python_file_is_failure(tmp_path,monkeypatch):

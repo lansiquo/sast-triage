@@ -22,11 +22,6 @@ def scan_output(tmp_path,monkeypatch,result):
     return runner.run_semgrep(['main.py'],str(tmp_path),config='/trusted/rules.yaml')
 
 
-def test_unknown_finding_severity_cannot_disappear_into_clean_scan(tmp_path,monkeypatch):
-    result=finding();result['extra']['severity']='CORRUPTED'
-    with pytest.raises(runner.SemgrepInvocationError):scan_output(tmp_path,monkeypatch,result)
-
-
 def test_transient_token_refresh_error_is_not_reported_as_permanent_401(monkeypatch):
     unauthorized=requests.Response();unauthorized.status_code=401
     monkeypatch.setattr(app.requests,'request',lambda *a,**k:unauthorized)
@@ -49,15 +44,17 @@ def test_unconfirmed_container_cleanup_cannot_return_success(tmp_path,monkeypatc
         runner.run_semgrep(['main.py'],str(tmp_path),config=str(rules))
 
 
-@pytest.mark.parametrize('update',[
-    {'check_id':None}, {'path':''}, {'extra':None}, {'start':{'line':0}},
-    {'start':{'line':True}}, {'start':{'line':'1'}}, {'end':{'line':0}},
-    {'extra':{'severity':'ERROR','message':{'unexpected':'object'}}},
-    {'extra':{'severity':'ERROR','message':'risk','metadata':['wrong-shape']}},
-])
-def test_malformed_findings_fail_before_filtering(tmp_path,monkeypatch,update):
-    with pytest.raises(runner.SemgrepInvocationError,match='finding evidence'):
-        scan_output(tmp_path,monkeypatch,finding()|update)
+def test_malformed_findings_fail_before_filtering(tmp_path,monkeypatch):
+    for update in [
+        {'check_id':None}, {'path':''}, {'extra':None}, {'start':{'line':0}},
+        {'start':{'line':True}}, {'start':{'line':'1'}}, {'end':{'line':0}},
+        {'extra':{'severity':'ERROR','message':{'unexpected':'object'}}},
+        {'extra':{'severity':'ERROR','message':'risk','metadata':['wrong-shape']}},
+        {'extra':{'severity':'CORRUPTED','message':'Risk','metadata':{}}},   # unknown severity must not vanish
+    ]:
+        with pytest.raises(runner.SemgrepInvocationError,match='finding evidence'):
+            scan_output(tmp_path,monkeypatch,finding()|update)
+            pytest.fail(f'accepted {update}')
 
 
 def test_valid_finding_and_intentional_severity_floor_are_preserved(tmp_path,monkeypatch):
@@ -66,21 +63,25 @@ def test_valid_finding_and_intentional_severity_floor_are_preserved(tmp_path,mon
     assert scan_output(tmp_path,monkeypatch,low)==[]
 
 
-@pytest.mark.parametrize('code,output,expected',[(0,'',True),(1,'',False),(0,'remaining-container-id\n',False)])
-def test_auto_removed_container_requires_confirmed_absence(monkeypatch,code,output,expected):
-    calls=[]
-    def docker(command,**kwargs):
-        calls.append(command)
-        if command[1]=='rm':return subprocess.CompletedProcess(command,1,'','PRIVATE-SENTINEL')
-        assert command[1:4]==['container','ls','-a']
-        assert 'name=^/prsec-test$' in command
-        return subprocess.CompletedProcess(command,code,output,'PRIVATE-SENTINEL')
-    monkeypatch.setattr(runner.subprocess,'run',docker)
-    if expected:runner._confirm_container_cleanup('prsec-test',{})
-    else:
-        with pytest.raises(runner.SemgrepInvocationError) as raised:runner._confirm_container_cleanup('prsec-test',{})
-        assert 'PRIVATE-SENTINEL' not in str(raised.value)
-    assert len(calls)==2
+def test_auto_removed_container_requires_confirmed_absence(monkeypatch):
+    for code,output,expected in [(0,'',True),(1,'',False),(0,'remaining-container-id\n',False)]:
+        case=(code,output)
+        calls=[]
+        def docker(command,**kwargs):
+            calls.append(command)
+            if command[1]=='rm':return subprocess.CompletedProcess(command,1,'','PRIVATE-SENTINEL')
+            assert command[1:4]==['container','ls','-a'],case
+            assert 'name=^/prsec-test$' in command,case
+            return subprocess.CompletedProcess(command,code,output,'PRIVATE-SENTINEL')
+        with monkeypatch.context() as m:
+            m.setattr(runner.subprocess,'run',docker)
+            if expected:runner._confirm_container_cleanup('prsec-test',{})
+            else:
+                with pytest.raises(runner.SemgrepInvocationError) as raised:
+                    runner._confirm_container_cleanup('prsec-test',{})
+                    pytest.fail(f'cleanup confirmed for {case}')
+                assert 'PRIVATE-SENTINEL' not in str(raised.value),case
+        assert len(calls)==2,case
 
 
 def test_cleanup_timeout_fails_safely(monkeypatch,caplog):

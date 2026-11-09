@@ -17,8 +17,16 @@ class IdleWorker(Exception):
     pass
 
 
-@pytest.mark.parametrize('failure_point', ['completion', 'persist_check'])
-def test_worker_restart_recovers_without_duplicate_remote_check(tmp_path, monkeypatch, caplog, failure_point):
+def test_worker_restart_recovers_without_duplicate_remote_check(tmp_path, monkeypatch, caplog):
+    for failure_point in ['completion', 'persist_check']:
+        with monkeypatch.context() as m:
+            try:
+                restart_after_failure(tmp_path / failure_point, m, caplog, failure_point)
+            except AssertionError as error:
+                raise AssertionError(f'failure_point={failure_point}: {error}') from error
+
+
+def restart_after_failure(tmp_path, monkeypatch, caplog, failure_point):
     configure(monkeypatch)
     monkeypatch.setattr(app, 'APP_ID', '42')
     monkeypatch.setattr(app, 'JOB_DB', str(tmp_path / 'jobs.db'))

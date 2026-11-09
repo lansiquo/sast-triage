@@ -38,13 +38,14 @@ def test_reopen_same_head_runs_once_after_completed_job(tmp_path,monkeypatch):
     assert JobStore(app.JOB_DB).claim()['id']==reopened['job_id']
 
 
-@pytest.mark.parametrize('sha,ref',[('c'*40,'main'),('b'*40,'release')])
-def test_base_context_change_requeues_unchanged_head(tmp_path,monkeypatch,sha,ref):
-    store=setup_queue(tmp_path,monkeypatch)
-    first=deliver(event()).json();store.claim();store.finish(first['job_id'])
-    changed=deliver(event('edited',sha,ref),'edit-1').json()
-    assert changed['queued'] and changed['job_id']!=first['job_id']
-    assert not deliver(event('edited',sha,ref),'edit-2').json()['queued']
+def test_base_context_change_requeues_unchanged_head(tmp_path,monkeypatch):
+    for sha,ref in [('c'*40,'main'),('b'*40,'release')]:
+        with monkeypatch.context() as m:
+            store=setup_queue(tmp_path/ref,m)
+            first=deliver(event()).json();store.claim();store.finish(first['job_id'])
+            changed=deliver(event('edited',sha,ref),'edit-1').json()
+            assert changed['queued'] and changed['job_id']!=first['job_id'],(sha,ref)
+            assert not deliver(event('edited',sha,ref),'edit-2').json()['queued'],(sha,ref)
 
 
 def test_concurrent_reopen_redeliveries_are_atomic(tmp_path,monkeypatch):

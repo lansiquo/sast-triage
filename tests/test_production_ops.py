@@ -30,7 +30,8 @@ def test_push_is_durable_and_deduplicated_without_network(tmp_path,monkeypatch):
     response=deliver_push(push());assert response.status_code==200
     assert response.json()['queued']
     assert not deliver_push(push()).json()['queued']
-    assert JobStore(app.JOB_DB).claim()['payload']['kind']=='base_push'
+    assert JobStore(app.JOB_DB).claim()['payload']=={'kind':'base_push','base_owner':'lansiquo','base_repo':'PR_Reviewer',
+        'installation_id':80788483,'base_ref':'main','after':'c'*40}
 
 
 def test_legacy_job_cannot_touch_github(tmp_path,monkeypatch):
@@ -82,15 +83,18 @@ def test_concurrent_expansion_has_one_commit(tmp_path,monkeypatch):
     assert store.status()['counts']['queued']==1
 
 
-@pytest.mark.parametrize('change,status',[
-    ({'ref':'refs/tags/v1'},200),({'deleted':True,'after':'0'*40},200),
-    ({'ref':'refs/heads/../bad'},400),({'after':'not-a-sha'},400),
-    ({'installation':{'id':123}},403),({'repository':{'owner':{'login':'other'},'name':'repo'}},403)])
-def test_push_scope_and_ref_validation(tmp_path,monkeypatch,change,status):
-    store=setup(tmp_path,monkeypatch)
-    result=deliver_push(push()|change)
-    assert result.status_code==status
-    assert store.claim() is None
+def test_push_scope_and_ref_validation(tmp_path,monkeypatch):
+    cases=[({'ref':'refs/tags/v1'},200),({'deleted':True,'after':'0'*40},200),
+        ({'ref':'refs/heads/../bad'},400),({'after':'not-a-sha'},400),
+        ({'installation':{'id':123}},403),({'repository':{'owner':{'login':'other'},'name':'repo'}},403),
+        ({'ref':None},400),({'deleted':'no'},400),({'installation':{}},400),({'repository':{'name':'PR_Reviewer'}},400),
+        ({'after':'0'*40},400)]
+    for index,(change,status) in enumerate(cases):
+        with monkeypatch.context() as m:
+            store=setup(tmp_path/f'case{index}',m)
+            result=deliver_push(push()|change)
+            assert result.status_code==status,change
+            assert store.claim() is None,change
 
 
 def test_push_enumeration_rate_limit_keeps_parent_recoverable(tmp_path,monkeypatch):
@@ -168,6 +172,55 @@ def test_environment_validator_never_exposes_values(tmp_path):
     env['GITHUB_APP_PRIVATE_KEY']='PRIVATE-SENTINEL';env['DOCKER_HOST']='PRIVATE-SENTINEL'
     errors=validate(env,'web');assert errors
     assert 'PRIVATE-SENTINEL' not in str(errors)
+
+
+def test_worker_environment_check(tmp_path):
+    from deploy.check_environment import validate
+    directory=tmp_path/'queue';directory.mkdir();directory.chmod(0o2770)
+    store=JobStore(directory/'jobs.db');(directory/'jobs.db').chmod(0o660)
+    pem=tmp_path/'app.pem';pem.write_text('PRIVATE-SENTINEL');pem.chmod(0o600)
+    env={'PRSEC_MODE':'durable','PRSEC_LOAD_DOTENV':'0','PRSEC_SHARED_STATE':'1','PRSEC_JOB_DB':str(directory/'jobs.db'),
+         'PRSEC_ALLOWED_REPOSITORY':'lansiquo/PR_Reviewer','PRSEC_ALLOWED_INSTALLATION_ID':'80788483',
+         'GITHUB_APP_ID':'12345','GITHUB_APP_PRIVATE_KEY_PATH':str(pem),'PRSEC_SCANNER_BACKEND':'docker',
+         'PRSEC_SCANNER_IMAGE':'example/scanner@sha256:'+'a'*64}
+    assert validate(env,'worker')==[]
+    legacy=payload();legacy.pop('base_sha');store.enqueue(legacy);pem.chmod(0o640)
+    errors=validate(env|{'GITHUB_WEBHOOK_SECRET':'PRIVATE-SENTINEL','PRSEC_SCANNER_COMMAND':'opengrep',
+                         'PRSEC_SCANNER_IMAGE':'example/scanner:latest'},'worker')
+    assert [e.split()[0] for e in errors]==['quarantine/replay','worker','PEM','approved','audited']
+    assert 'PRIVATE-SENTINEL' not in str(errors)
+    assert 'queue directory must be provisioned' in validate(env|{'PRSEC_JOB_DB':str(tmp_path/'missing'/'jobs.db')},'worker')
+
+
+def test_queue_cli_prints_reports_and_refuses_without_details(tmp_path,monkeypatch,capsys):
+    import sys
+    import queue_maintenance
+    store=JobStore(tmp_path/'jobs.db');store.enqueue(payload())
+    with store.connect() as db:db.execute("UPDATE jobs SET payload='[]'")
+    monkeypatch.setattr(sys,'argv',['queue_maintenance','inspect',str(tmp_path/'jobs.db')])
+    queue_maintenance.main()
+    assert json.loads(capsys.readouterr().out)['invalid_active']==1
+    monkeypatch.setattr(sys,'argv',['queue_maintenance','backup',str(tmp_path/'missing.db'),str(tmp_path/'copy.db')])
+    with pytest.raises(SystemExit) as refused:queue_maintenance.main()
+    assert refused.value.code==1 and 'Queue operation refused: ValueError' in capsys.readouterr().err
+    assert not (tmp_path/'copy.db').exists()
+
+
+def test_job_cli_shows_status_and_requeues_only_failed_jobs(tmp_path,monkeypatch,capsys):
+    import sys
+    import manage_jobs
+    path=tmp_path/'jobs.db'
+    def run(*args):
+        monkeypatch.setattr(sys,'argv',['manage_jobs','--db',str(path),*args]);manage_jobs.main()
+        return json.loads(capsys.readouterr().out)
+    with pytest.raises(SystemExit):run()
+    assert not path.exists()
+    store=JobStore(path);key,_=store.enqueue(payload());store.claim();store.fail(key,'HTTP_403')
+    assert run()['counts']['failed']==1
+    with pytest.raises(SystemExit):run('--quarantine-legacy','--retry',key)
+    assert run('--retry',key)=={'requeued':True,'job_id':key}
+    assert run('--retry',key)=={'requeued':False,'job_id':key}
+    assert run('--quarantine-legacy')=={'quarantined':0}
 
 
 def test_corrupt_backup_is_not_published(tmp_path):

@@ -85,23 +85,28 @@ def scan_fork_pr():
                                     expected_base_sha=BASE_SHA, expected_base_ref='main')
 
 
-@pytest.mark.parametrize('status', [403, 404, 410, 422])
-def test_permanent_api_error_completes_the_check_as_failure(github, status):
-    github.tarball_status = status
-    outcome = scan_fork_pr()
-    assert outcome == {'conclusion': 'failure', 'scan_error': f'HTTP_{status}'}
-    [update] = github.check_updates()
-    assert update['status'] == 'completed' and update['conclusion'] == 'failure'
-    assert f'HTTP {status}' in update['output']['summary']
-    assert 'No clean result was issued' in update['output']['summary']
+def test_permanent_api_error_completes_the_check_as_failure(github):
+    for status in [403, 404, 410, 422]:
+        github.calls.clear()
+        github.tarball_status = status
+        outcome = scan_fork_pr()
+        assert outcome == {'conclusion': 'failure', 'scan_error': f'HTTP_{status}'}, status
+        updates = github.check_updates()
+        assert len(updates) == 1, status
+        [update] = updates
+        assert update['status'] == 'completed' and update['conclusion'] == 'failure', status
+        assert f'HTTP {status}' in update['output']['summary'], status
+        assert 'No clean result was issued' in update['output']['summary'], status
 
 
-@pytest.mark.parametrize('status', [500, 502])
-def test_transient_api_error_still_leaves_the_check_to_the_worker_retry(github, status):
-    github.tarball_status = status
-    with pytest.raises(requests.HTTPError):
-        scan_fork_pr()
-    assert github.check_updates() == []
+def test_transient_api_error_still_leaves_the_check_to_the_worker_retry(github):
+    for status in [500, 502]:
+        github.calls.clear()
+        github.tarball_status = status
+        with pytest.raises(requests.HTTPError):
+            scan_fork_pr()
+            pytest.fail(f'HTTP {status} was not raised for retry')
+        assert github.check_updates() == [], status
 
 
 def test_worker_records_a_completed_permanent_failure_without_retrying(tmp_path, monkeypatch, github):

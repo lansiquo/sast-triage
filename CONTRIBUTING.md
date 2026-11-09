@@ -1,5 +1,5 @@
 ##### Dev setup
-1. Use Python 3.11–3.13 (`.python-version` pins 3.12; CI runs 3.12).
+1. Use Python 3.11–3.14 (`.python-version` pins 3.12; CI runs all four).
 2. Create a virtualenv, install the dependencies and run the checks:
    ```bash
    python3 -m venv .venv && source .venv/bin/activate

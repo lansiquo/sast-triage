@@ -16,44 +16,53 @@ def test_catalog_has_exact_2025_categories_and_real_fixtures():
             ast.parse(path.read_text())  # Parse only: no import/exec.
 
 
-@pytest.mark.parametrize('scenario', [k for k,v in demo_web.CATALOG.items() if v['mode']=='behavioral'])
-@pytest.mark.parametrize('variant', ['vulnerable', 'fixed'])
-def test_behavioral_examples_execute_and_return_assertions(scenario, variant, monkeypatch):
+BEHAVIORAL = [k for k, v in demo_web.CATALOG.items() if v['mode'] == 'behavioral']
+
+
+def test_behavioral_examples_execute_and_return_assertions(monkeypatch):
+    assert BEHAVIORAL
     monkeypatch.setattr(demo_web, 'run_semgrep', lambda *a, **k: pytest.fail('Behavioral examples must not call scanner'))
     client = TestClient(demo_web.app, base_url='http://127.0.0.1')
-    response = client.post(f'/api/scan/{scenario}/{variant}', headers=HEADERS)
-    assert response.status_code == 200
-    assert response.json()['status'] == ('failure' if variant == 'vulnerable' else 'success')
-    assert response.json()['engine'] == 'behavioral'
-    assert response.json()['harness_completed'] is True
-    assert response.json()['assertions']
-    assert all(a['passed'] for a in response.json()['assertions']) == (variant == 'fixed')
-    assert response.json()['findings'] == []
-    assert 'synthetic' in response.json()['provenance']
-    data = client.get(f'/api/fixtures/{scenario}').json()
-    assert data['source'][variant]
-    assert '+ ' in data['diff'] or '+' in data['diff']
+    for scenario in BEHAVIORAL:
+        for variant in ('vulnerable', 'fixed'):
+            case = (scenario, variant)
+            response = client.post(f'/api/scan/{scenario}/{variant}', headers=HEADERS)
+            assert response.status_code == 200, case
+            result = response.json()
+            assert result['status'] == ('failure' if variant == 'vulnerable' else 'success'), case
+            assert result['engine'] == 'behavioral', case
+            assert result['harness_completed'] is True, case
+            assert result['assertions'], case
+            assert all(a['passed'] for a in result['assertions']) == (variant == 'fixed'), case
+            assert result['findings'] == [], case
+            assert 'synthetic' in result['provenance'], case
+            data = client.get(f'/api/fixtures/{scenario}').json()
+            assert data['source'][variant], case
+            assert '+ ' in data['diff'] or '+' in data['diff'], case
 
 
-@pytest.mark.parametrize('variant', ['vulnerable', 'fixed'])
-def test_config_fixture_live(variant, monkeypatch):
+def test_config_fixture_live(monkeypatch):
     monkeypatch.setenv('PRSEC_MODE', 'local')
     monkeypatch.setenv('PRSEC_SCANNER_BACKEND', 'local')
     client = TestClient(demo_web.app, base_url='http://127.0.0.1')
-    result = client.post(f'/api/scan/config/{variant}', headers=HEADERS).json()
-    assert result['status'] == ('failure' if variant == 'vulnerable' else 'success')
-    assert {f['rule_id'] for f in result['findings']} == ({'demo-python-fastapi-debug'} if variant == 'vulnerable' else set())
-
-@pytest.mark.parametrize('scenario', list(demo_web.CATALOG))
-def test_highlights_target_existing_specific_code_lines(scenario):
-    client = TestClient(demo_web.app, base_url='http://127.0.0.1')
-    data = client.get(f'/api/fixtures/{scenario}').json()
-    assert data['review_mode'] == demo_web.CATALOG[scenario]['mode']
     for variant in ('vulnerable', 'fixed'):
-        lines = data['source'][variant].splitlines()
-        focus = data['highlights'][variant]
-        assert focus and len(set(focus)) == len(focus)
-        assert len(focus) < len(lines)
-        for number in focus:
-            assert 1 <= number <= len(lines)
-            assert lines[number-1].strip() and not lines[number-1].lstrip().startswith('#')
+        result = client.post(f'/api/scan/config/{variant}', headers=HEADERS).json()
+        assert result['status'] == ('failure' if variant == 'vulnerable' else 'success'), variant
+        assert {f['rule_id'] for f in result['findings']} == (
+            {'demo-python-fastapi-debug'} if variant == 'vulnerable' else set()), variant
+
+
+def test_highlights_target_existing_specific_code_lines():
+    client = TestClient(demo_web.app, base_url='http://127.0.0.1')
+    for scenario in demo_web.CATALOG:
+        data = client.get(f'/api/fixtures/{scenario}').json()
+        assert data['review_mode'] == demo_web.CATALOG[scenario]['mode'], scenario
+        for variant in ('vulnerable', 'fixed'):
+            case = (scenario, variant)
+            lines = data['source'][variant].splitlines()
+            focus = data['highlights'][variant]
+            assert focus and len(set(focus)) == len(focus), case
+            assert len(focus) < len(lines), case
+            for number in focus:
+                assert 1 <= number <= len(lines), (case, number)
+                assert lines[number-1].strip() and not lines[number-1].lstrip().startswith('#'), (case, number)
