@@ -57,12 +57,17 @@ EXPECTED = {
 }
 
 
-def report(title, findings, conclusion):
+def print_summary(title, findings, conclusion):
+    """One line per triaged finding, then the Check Run's Markdown summary with the gate result."""
     print(f'\n{title}: {conclusion.upper()}')
     for f in findings:
         label = 'new' if f['new'] else 'pre-existing'
         print(f"  [{f['priority']}, {label}] {f['path']}:{f['start_line']}  {f['rule_id']}")
     print(summarize_findings(findings)[1])
+
+
+def report(title, findings, conclusion):
+    print_summary(title, findings, conclusion)
     print(json.dumps(to_github_annotations(findings), indent=2))
 
 
