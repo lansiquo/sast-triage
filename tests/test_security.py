@@ -252,7 +252,7 @@ def test_durable_mode_refuses_unsandboxed_scanner(monkeypatch):
 
 
 def test_docker_controller_and_container_do_not_receive_app_secrets(tmp_path, monkeypatch):
-    (tmp_path/'main.py').write_text('print(1)')
+    repo=tmp_path/'repo';repo.mkdir();(repo/'main.py').write_text('print(1)')
     rules=tmp_path/'trusted.yml';rules.write_text('rules: []')
     monkeypatch.setenv('PRSEC_MODE','durable')
     monkeypatch.setenv('PRSEC_SCANNER_BACKEND','docker')
@@ -275,4 +275,4 @@ def test_docker_controller_and_container_do_not_receive_app_secrets(tmp_path, mo
         assert not set(secret_names) & set(kwargs['env'])
         return subprocess.CompletedProcess(cmd,0,'','')
     monkeypatch.setattr(runner.subprocess,'run',cleanup)
-    assert runner.run_semgrep(['main.py'],str(tmp_path),config=str(rules))==[]
+    assert runner.run_semgrep(['main.py'],str(repo),config=str(rules))==[]

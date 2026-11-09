@@ -57,12 +57,12 @@ JS_EXPECTED = {'js-dangerous-eval','js-implied-eval','js-vm-dynamic-code','js-ch
 
 def main():
     with tempfile.TemporaryDirectory(prefix='prsec_compatibility_') as temporary:
-        root=Path(temporary)
+        root=Path(temporary)/'source';root.mkdir()   # the rule file stays outside the scanned folder
         (root/'all_rules.py').write_text(SOURCE)
         (root/'all_rules.js').write_text(JS_SOURCE)
         (root/'clean.py').write_text('import hashlib\nhashlib.sha256(b"sample")\n')
         (root/'clean.js').write_text('const crypto = require("crypto");\ncrypto.createHash("sha256");\n')
-        rules=root/'trusted.yml';rules.write_text(OFFLINE_RULESET)
+        rules=Path(temporary)/'trusted.yml';rules.write_text(OFFLINE_RULESET)
         findings=run_semgrep(['all_rules.py','all_rules.js'],str(root),config=str(rules))
         actual={f['rule_id'] for f in findings}
         expected=EXPECTED|JS_EXPECTED

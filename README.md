@@ -2,7 +2,7 @@
 
 A GitHub App service that reviews pull requests with Semgrep. It labels each finding **new** or **pre-existing** from the pull request's diff, ranks it **P1–P3**, and fails the check only on new P1 findings. A pull request is blocked by what it introduced, not by what was already there.
 
-It runs 29 service-owned rules for high-signal Python, JavaScript and TypeScript patterns (`.py`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`). Rules, ignore files and `nosemgrep` comments from the pull request are not used. Findings are review aids, not a security audit. For npm dependencies, see the companion [sca-triage](https://github.com/lansiquo/sca-triage).
+It runs 29 service-owned rules for high-signal Python, JavaScript and TypeScript patterns (`.py`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`). Rules, ignore files and `nosemgrep` comments from the pull request are not used, and Semgrep never downloads rules: it runs with metrics off and accepts only the local, service-owned rule file. Findings are review aids, not a security audit. For npm dependencies, see the companion [sca-triage](https://github.com/lansiquo/sca-triage).
 
 The same rules, triage and gate also run on a whole repository from the command line (`scan_repo.py`). On OWASP NodeGoat, an intentionally vulnerable Express and MongoDB app, they find its `eval` code injection, NoSQL injection, open redirect, hard-coded session secret, insecure session cookie and disabled template escaping; see [Example: OWASP NodeGoat](#example-owasp-nodegoat).
 
@@ -21,7 +21,7 @@ python -m pip install -r requirements.txt
 ```
 
 ```bash
-make test       # offline regression suite (159 tests), outbound HTTP blocked
+make test       # offline regression suite (160 tests), outbound HTTP blocked
 make selfcheck  # full-repository scan of a three-file fixture; passes when its planted P1 fails the gate
 make check      # test, then selfcheck (what CI runs)
 ```

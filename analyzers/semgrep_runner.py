@@ -39,6 +39,10 @@ def run_semgrep(
     """
     Run Semgrep on the provided file paths (relative to repo_root) and return normalized findings.
 
+    `config` must be the absolute path of one local, service-owned rule file
+    outside repo_root. Registry IDs, 'auto' and URLs are refused, so Semgrep
+    never fetches rules, and the scanned project can never supply its own.
+
     Returns a list of dicts like:
       {
         "path": "app.py",
@@ -58,15 +62,12 @@ def run_semgrep(
         raise ValueError("Unsupported scanner backend")
     if os.getenv("PRSEC_MODE", "local") == "durable" and backend != "docker":
         raise RuntimeError("Durable mode cannot run an unsandboxed scanner process")
+    ruleset = _local_ruleset(config, repo_root)
     if not paths:
         return []
 
     container_backend = backend == "docker"
     semgrep_bin = "semgrep" if container_backend else _ensure_semgrep_available()
-    cfg_value = _resolve_config(config, repo_root)
-
-    # Allow comma/whitespace separated config list → multiple --config flags
-    configs = _split_configs(cfg_value)
 
     # Excludes (hardened by default)
     excludes = list(exclude or [])
@@ -108,8 +109,7 @@ def run_semgrep(
     if scanner_command == "opengrep":
         # Opengrep removed metrics support; its native CLI rejects this option.
         base_cmd.remove("--metrics=off")
-    for c in configs:
-        base_cmd += ["--config", c]
+    base_cmd += ["--config", ruleset]
     for pat in excludes:
         base_cmd += ["--exclude", pat]
 
@@ -143,14 +143,14 @@ def run_semgrep(
             for key in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "XDG_RUNTIME_DIR"):
                 if key in os.environ:
                     env[key] = os.environ[key]
-            if len(configs) != 1 or not Path(configs[0]).is_file():
+            if not Path(ruleset).is_file():
                 raise ValueError("Sandbox scans require exactly one service-owned local ruleset")
             stage_root.chmod(0o755)
-            Path(configs[0]).chmod(0o644)
+            Path(ruleset).chmod(0o644)
             for source in stage_root.rglob("*"):
                 source.chmod(0o755 if source.is_dir() else 0o644)
             container_name = "prsec-" + uuid.uuid4().hex
-            cmd = docker_scan_command(stage, configs[0], base_cmd, container_name)
+            cmd = docker_scan_command(stage, ruleset, base_cmd, container_name)
         try:
             if container_backend:
                 proc = _bounded_container_run(cmd, stage, env, timeout_s + 5)
@@ -403,52 +403,23 @@ def _ensure_semgrep_available() -> str:
     )
 
 
-def _resolve_config(cfg: Optional[str], repo_root: str) -> str:
+def _local_ruleset(config: Optional[str], repo_root: str) -> str:
+    """The one rule file a scan may use: an absolute .yml/.yaml path outside the scanned tree.
+
+    Anything else fails closed: registry IDs (p/..., r/...), 'auto', URLs,
+    lists of configs, relative paths and files inside the scanned repository.
+    There is no default and no environment fallback, so Semgrep never
+    downloads rules or runs rules that a pull request wrote.
     """
-    Resolve config string:
-      - if cfg is provided, use it
-      - else use env SEMGREP_CONFIG (or typo SEMGRP_CONFIG), else 'p/ci'
-      - local paths are made absolute relative to repo_root
-      - registry IDs (p/... r/...), 'auto', and URLs are passed through
-      - the returned string may contain multiple configs separated by ',' or whitespace
-    """
-    value = (cfg or os.getenv("SEMGREP_CONFIG") or os.getenv("SEMGRP_CONFIG") or "p/ci").strip()
-    if not value:
-        return "p/ci"
-
-    # If it's a single local path, absolutize it; otherwise pass through
-    # (run_semgrep will split on commas/whitespace)
-    parts = _split_configs(value)
-    absolutized: List[str] = []
-    for p in parts:
-        if _looks_like_local_path(p):
-            absolutized.append(os.path.abspath(os.path.join(os.path.abspath(repo_root), p)))
-        else:
-            absolutized.append(p)
-    return ",".join(absolutized)
-
-
-def _split_configs(s: Optional[str]) -> List[str]:
-    if not s:
-        return ["p/ci"]
-    # split on commas and/or whitespace, preserve order
-    raw = str(s).replace("\n", " ").replace("\t", " ").split(",")
-    tokens: List[str] = []
-    for chunk in raw:
-        for t in chunk.strip().split():
-            if t:
-                tokens.append(t)
-    return tokens or ["p/ci"]
-
-
-def _looks_like_local_path(s: str) -> bool:
-    if s.startswith(("p/", "r/")):
-        return False
-    if s in {"auto", "semgrep-auto"}:
-        return False
-    if s.startswith(("http://", "https://")):
-        return False
-    return any(sep in s for sep in ("/", "\\")) or s.endswith((".yml", ".yaml"))
+    value = config if isinstance(config, str) else ""
+    path = Path(value)
+    if not value or value != value.strip() or "," in value or not path.is_absolute() \
+            or path.suffix not in {".yml", ".yaml"} or path.is_dir():
+        raise ValueError("Scanner rules must be one local .yml or .yaml file given by absolute path; "
+                         "registry IDs, 'auto' and URLs are refused")
+    if path.resolve().is_relative_to(Path(repo_root).resolve()):
+        raise ValueError("Scanner rules must not come from the scanned repository")
+    return str(path)
 
 
 def _parse_json_or_raise(stdout: str) -> Dict[str, Any]:

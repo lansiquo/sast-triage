@@ -34,14 +34,15 @@ def test_transient_token_refresh_error_is_not_reported_as_permanent_401(monkeypa
 
 
 def test_unconfirmed_container_cleanup_cannot_return_success(tmp_path,monkeypatch):
-    (tmp_path/'main.py').write_text('print(1)\n');rules=tmp_path/'rules.yaml';rules.write_text('rules: []\n')
+    repo=tmp_path/'repo';repo.mkdir();(repo/'main.py').write_text('print(1)\n')
+    rules=tmp_path/'rules.yaml';rules.write_text('rules: []\n')
     monkeypatch.setenv('PRSEC_MODE','durable');monkeypatch.setenv('PRSEC_SCANNER_BACKEND','docker')
     monkeypatch.setenv('PRSEC_SCANNER_IMAGE','example/scanner@sha256:'+'a'*64)
     data={'results':[],'errors':[],'paths':{'scanned':['main.py']}}
     monkeypatch.setattr(runner,'_bounded_container_run',lambda *a,**k:subprocess.CompletedProcess([],0,json.dumps(data),''))
     monkeypatch.setattr(runner.subprocess,'run',lambda *a,**k:subprocess.CompletedProcess([],1,'','PRIVATE-SENTINEL'))
     with pytest.raises(runner.SemgrepInvocationError,match='cleanup'):
-        runner.run_semgrep(['main.py'],str(tmp_path),config=str(rules))
+        runner.run_semgrep(['main.py'],str(repo),config=str(rules))
 
 
 def test_malformed_findings_fail_before_filtering(tmp_path,monkeypatch):

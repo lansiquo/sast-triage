@@ -256,10 +256,11 @@ def test_every_supported_extension_is_scanned_by_its_own_language(tmp_path, monk
 def test_findings_point_at_the_offending_line(tmp_path, monkeypatch, name, source, line):
     monkeypatch.setenv('PRSEC_MODE', 'local')
     monkeypatch.setenv('PRSEC_SCANNER_BACKEND', 'local')
-    (tmp_path / name).write_text(source + '\n')
+    (tmp_path / 'repo').mkdir()
+    (tmp_path / 'repo' / name).write_text(source + '\n')
     rules = tmp_path / 'rules.yaml'
     rules.write_text(OFFLINE_RULESET)
-    [finding] = run_semgrep([name], str(tmp_path), config=str(rules))
+    [finding] = run_semgrep([name], str(tmp_path / 'repo'), config=str(rules))
     assert (finding['start_line'], finding['end_line']) == (line, line)
 
 

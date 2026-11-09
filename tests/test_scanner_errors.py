@@ -86,8 +86,8 @@ def test_docker_sandbox_preconditions(tmp_path, monkeypatch):
         m.setenv('PRSEC_SCANNER_BACKEND', 'docker')
         m.setenv('DOCKER_HOST', 'unix:///run/user/1000/docker.sock')
         with pytest.raises(ValueError, match='exactly one service-owned local ruleset'):
-            scan(tmp_path, monkeypatch, clean(), config='p/ci')
-        rules = tmp_path / 'rules.yml'
+            scan(tmp_path, monkeypatch, clean(), config='/trusted/missing.yml')
+        rules = tmp_path.parent / f'{tmp_path.name}-rules.yml'
         rules.write_text('rules: []')
         envs = []
         m.setattr(runner, '_bounded_container_run', lambda cmd, cwd, env, timeout:
@@ -129,11 +129,32 @@ def test_launcher_check(tmp_path):
     assert not runner._launcher_is_usable(str(tmp_path / 'missing'))
 
 
-def test_config_resolution(monkeypatch):
-    monkeypatch.delenv('SEMGREP_CONFIG', raising=False)
-    monkeypatch.delenv('SEMGRP_CONFIG', raising=False)
-    for config, expected in (('p/ci', 'p/ci'), ('auto', 'auto'),
-                             ('https://example.com/r.yml', 'https://example.com/r.yml'),
-                             ('rules.yml', '/repo/rules.yml'), ('rules/a.yml, p/ci', '/repo/rules/a.yml,p/ci'),
-                             ('  ', 'p/ci')):
-        assert runner._resolve_config(config, '/repo') == expected, config
+def test_only_one_local_rule_file_outside_the_scanned_tree_configures_the_scanner(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, '_bounded_container_run', lambda *a, **k: pytest.fail('scanner must not start'))
+    monkeypatch.setenv('SEMGREP_CONFIG', '/trusted/rules.yml')   # no environment fallback
+    (tmp_path / 'main.py').write_text('print(1)\n')
+    (tmp_path / 'rules.yml').write_text('rules: []\n')         # inside the scanned tree
+    (tmp_path / 'ruledir.yaml').mkdir()
+    refused = (None, '', 'p/ci', 'p/default', 'r/python.lang.security.audit.eval', 'auto', 'semgrep-auto',
+               'https://semgrep.dev/c/p/ci', 'http://rules.example/r.yml', 'rules.yml', './rules.yml',
+               'rules/a.yml', '/trusted/a.yml,/trusted/b.yml', '/trusted/rules.json', ' /trusted/rules.yml',
+               str(tmp_path / 'rules.yml'), str(tmp_path / 'sub' / '..' / 'rules.yml'), str(tmp_path / 'ruledir.yaml'))
+    for config in refused:
+        with case(config), pytest.raises(ValueError, match='Scanner rules must'):
+            runner.run_semgrep(['main.py'], str(tmp_path), config=config)
+    with pytest.raises(ValueError, match='Scanner rules must'):
+        runner.run_semgrep([], str(tmp_path), config='auto')   # refused even with nothing to scan
+
+
+def test_semgrep_runs_with_metrics_off_and_only_the_local_rule_file(tmp_path, monkeypatch):
+    (tmp_path / 'main.py').write_text('print(1)\n')
+    monkeypatch.setattr(runner, '_ensure_semgrep_available', lambda: '/fake/semgrep')
+    calls = []
+    monkeypatch.setattr(runner, '_bounded_container_run',
+                        lambda **k: calls.append(k) or subprocess.CompletedProcess([], 0, json.dumps(clean()), ''))
+    rules = tmp_path.parent / f'{tmp_path.name}-trusted.yml'
+    assert runner.run_semgrep(['main.py'], str(tmp_path), config=str(rules)) == []
+    cmd, env = calls[0]['cmd'], calls[0]['env']
+    assert cmd.count('--config') == 1 and cmd[cmd.index('--config') + 1] == str(rules)
+    assert {'--metrics=off', '--disable-version-check', '--disable-nosem'} <= set(cmd)
+    assert env['SEMGREP_SEND_METRICS'] == 'off' and env['SEMGREP_ENABLE_VERSION_CHECK'] == '0'
