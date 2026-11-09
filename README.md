@@ -14,18 +14,18 @@ P1–P3 the same way.
 
 ## Example: OWASP NodeGoat
 
-I scanned [OWASP NodeGoat](https://github.com/OWASP/NodeGoat) at commit `c5cb68a`, a deliberately
-vulnerable Express and MongoDB app for learning the OWASP Top 10 (Python 3.11–3.14). The scan only parses
-its source; none of NodeGoat's code is installed or run. From an empty folder:
+I scanned [OWASP NodeGoat](https://github.com/OWASP/NodeGoat), a deliberately vulnerable Express and
+MongoDB app for learning the OWASP Top 10. The results below are from its latest commit, `c5cb68a`
+(June 2023). It needs Python 3.11–3.14. The scan only parses its source; none of NodeGoat's code is
+installed or run. From an empty folder:
 
 ```bash
 git clone https://github.com/lansiquo/sast-triage.git
 python3 -m venv sast-venv
 sast-venv/bin/pip install -r sast-triage/requirements-cli.txt
 git clone https://github.com/OWASP/NodeGoat.git
-git -C NodeGoat checkout c5cb68a
-sast-venv/bin/python sast-triage/scan_repo.py NodeGoat                   # the whole project
-sast-venv/bin/python sast-triage/scan_repo.py NodeGoat --base 5e71697~1  # its last two pull requests
+sast-venv/bin/python sast-triage/scan_repo.py NodeGoat                   # whole project
+sast-venv/bin/python sast-triage/scan_repo.py NodeGoat --base 5e71697~1  # last two PRs
 ```
 
 The whole-project scan, without the closing legend and with the gate's repeat of the six P1 lines
@@ -114,8 +114,8 @@ GitHub account, token or network. `requirements-cli.txt` installs only Semgrep, 
 git clone https://github.com/lansiquo/sast-triage.git
 python3 -m venv sast-venv
 sast-venv/bin/pip install -r sast-triage/requirements-cli.txt
-sast-venv/bin/python sast-triage/scan_repo.py /path/to/project                    # every finding counts as new
-sast-venv/bin/python sast-triage/scan_repo.py /path/to/project --base origin/main  # only what changed since main
+sast-venv/bin/python sast-triage/scan_repo.py /path/to/project
+sast-venv/bin/python sast-triage/scan_repo.py /path/to/project --base origin/main
 ```
 
 ```text
