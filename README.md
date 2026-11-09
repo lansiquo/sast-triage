@@ -21,25 +21,48 @@ python -m pip install -r requirements.txt
 ```
 
 ```bash
-make test       # offline regression suite (160 tests), outbound HTTP blocked
+make test       # offline regression suite (168 tests), outbound HTTP blocked
 make selfcheck  # full-repository scan of a three-file fixture; passes when its planted P1 fails the gate
 make check      # test, then selfcheck (what CI runs)
 ```
 
 ## Use it on your project
 
-After the Quick start setup, point `scan_repo.py` at any project folder. It reads the source files only: nothing is run or installed, and no GitHub account, token or network is needed.
+Point `scan_repo.py` at any project folder. It reads the source files only: nothing is run or installed, and no GitHub account or token is needed. For the scanner alone, `requirements-cli.txt` installs just Semgrep (pinned to the tested 1.79.0) instead of the web service's packages:
 
 ```bash
-.venv/bin/python scan_repo.py /path/to/project          # ranked findings and the gate
-.venv/bin/python scan_repo.py /path/to/project --json   # the same, as JSON
+git clone https://github.com/lansiquo/sast-triage.git
+python3 -m venv sast-venv && sast-venv/bin/pip install -r sast-triage/requirements-cli.txt
+sast-venv/bin/python sast-triage/scan_repo.py /path/to/project                   # every finding counts as new
+sast-venv/bin/python sast-triage/scan_repo.py /path/to/project --base origin/main # only what changed since main
 ```
 
 ```text
-scan_repo.py DIRECTORY [--json] [--timeout SECONDS]
+scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--timeout SECONDS]
 ```
 
-It scans every Python, JavaScript and TypeScript file except those in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv folders, and minified `*.min.js` files. The project's own Semgrep rules and ignore files are not used. There is no diff, so every finding counts as new: on an existing codebase, findings that were already there also count. The exit status is 1 when the gate fails (a new P1), 0 when it passes and 2 on a usage or scanner error. `--timeout` limits the scan (default 300 seconds).
+Without `--base`, every supported file is scanned and every finding counts as new, so on an existing codebase findings that were already there also count. With `--base REF`, only the files changed since the merge base of `REF` and `HEAD` are scanned, and a finding is new when it covers a line they added or changed: the same labels a pull request gets. `--json` prints the result as JSON, `--markdown FILE` also writes the Markdown summary, and `--timeout` limits the scan (default 300 seconds).
+
+Files in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv folders, and minified `*.min.js` files, are skipped. The project's own Semgrep rules, ignore files and git diff helpers are not used. The exit status is 1 when the gate fails (a new P1), 0 when it passes and 2 on a usage, git or scanner error.
+
+## GitHub Action
+
+```yaml
+on: pull_request
+jobs:
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0              # the base branch's history, to diff against it
+      - uses: lansiquo/sast-triage@main
+        with:
+          path: .                     # directory to scan
+          base: ""                    # default: the pull request's base branch; "none" for a full scan
+```
+
+On a pull request it scans the files changed since the base branch, fails the step on a new P1 and adds the summary to the job summary. On other events, or with `base: none`, it scans everything. It installs only `requirements-cli.txt` with the runner's Python and uses no other actions. Pin a full commit SHA instead of `@main` for the strictest supply-chain safety.
 
 ### Review pull requests with a GitHub App
 
@@ -156,7 +179,8 @@ Full scan (44 files): FAILURE
 | `app.py` | Webhook service and scan pipeline |
 | `analyzers/` | Semgrep runner and triage |
 | `trusted_rules.py` | The 29 service-owned rules |
-| `scan_repo.py` | Full-repository scan from the command line |
+| `scan_repo.py` | Command-line scan of a whole repository, or of what changed since a git ref (`--base`) |
+| `action.yml`, `requirements-cli.txt` | GitHub Action, and the scanner-only install it and the command line use |
 | `rules/` | Extra Semgrep rule packs for manual scans; the service does not load them |
 | `worker.py`, `job_store.py` | Durable mode: SQLite queue and separate worker |
 | `tests/` | Offline regression suite (`make test`); `tests/fixtures/project` is the `make selfcheck` fixture |

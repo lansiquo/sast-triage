@@ -119,3 +119,94 @@ def test_command_line_on_the_make_check_fixture():
     assert '3 Python, JavaScript and TypeScript files, 29 service-owned rules.' in result.stdout
     assert '  [P1, new] server.js:2  js-dangerous-eval\n  [P2, new] __tests__/server.test.js:2  js-dangerous-eval\n' \
         in result.stdout
+
+
+# --base: only files changed since a git ref are scanned, labelled as for a pull request.
+
+def git(root, *args):
+    subprocess.run(['git', '-C', str(root), *args], check=True, capture_output=True, text=True,
+                   env={'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t', 'GIT_COMMITTER_NAME': 't',
+                        'GIT_COMMITTER_EMAIL': 't@t', 'HOME': str(root), 'PATH': '/usr/bin:/bin'})
+
+
+def repository(tmp_path):
+    """A base commit on main, then a feature branch that edits, adds and moves files."""
+    project(tmp_path, {
+        'src/legacy.py': "import hashlib\nhashlib.md5(b'old')",                 # pre-existing P1, file edited
+        'src/untouched.py': "import hashlib\nhashlib.md5(b'old')",              # never scanned
+        'tests/test_cache.py': "import pickle\npickle.loads(b'')",             # moved into runtime code
+        'web/app.js': 'const n = 1;',
+    })
+    git(tmp_path, 'init', '-q', '-b', 'main')
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'base')
+    git(tmp_path, 'switch', '-q', '-c', 'feature')
+    project(tmp_path, {'src/legacy.py': "import hashlib\nhashlib.md5(b'old')\nimport os\nos.system(cmd)",
+                       'web/app.js': 'const n = 1;\nconst total = eval(req.body.preTax);',
+                       'docs/notes.md': 'eval(code)'})
+    git(tmp_path, 'mv', 'tests/test_cache.py', 'src/cache.py')
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'feature')
+    return tmp_path
+
+
+def test_base_scans_only_changed_files_and_labels_findings_like_a_pull_request(tmp_path, capsys):
+    root = repository(tmp_path)
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report['scan'] == 'changes since main' and report['files'] == ['src/cache.py', 'src/legacy.py', 'web/app.js']
+    found = {(f['path'], f['start_line'], f['rule_id']): (f['priority'], f['new']) for f in report['findings']}
+    assert found == {
+        ('src/legacy.py', 4, 'py-os-system'): ('P1', True),
+        ('src/legacy.py', 2, 'py-weak-md5'): ('P1', False),               # untouched line: pre-existing
+        ('web/app.js', 2, 'js-dangerous-eval'): ('P1', True),
+        ('src/cache.py', 2, 'py-insecure-deserialization-pickle-loads'): ('P1', True),   # test -> runtime
+    }
+
+
+def test_base_passes_when_only_pre_existing_findings_remain(tmp_path, capsys):
+    root = repository(tmp_path)
+    git(root, 'switch', '-q', 'main')
+    git(root, 'switch', '-q', '-c', 'docs-only')
+    project(root, {'src/legacy.py': "import hashlib\nhashlib.md5(b'old')\n# reviewed"})
+    git(root, 'commit', '-q', '-am', 'comment')
+    assert scan_repo.main([str(root), '--base', 'main']) == 0
+    out = capsys.readouterr().out
+    assert '[P1, pre-existing] src/legacy.py:2  py-weak-md5' in out and '**Gate: PASS**' in out
+    assert 'New: on lines changed since main.' in out
+
+
+def test_base_on_a_subfolder_uses_paths_relative_to_it(tmp_path, capsys):
+    root = repository(tmp_path)
+    assert scan_repo.main([str(root / 'web'), '--base', 'main', '--json']) == 1
+    assert json.loads(capsys.readouterr().out)['files'] == ['app.js']
+
+
+def test_markdown_file_holds_the_summary(tmp_path, capsys):
+    root = repository(tmp_path)
+    summary = tmp_path / 'summary.md'
+    assert scan_repo.main([str(root), '--base', 'main', '--markdown', str(summary)]) == 1
+    text = summary.read_text()
+    assert text.startswith('### sast-triage — Semgrep summary') and '**Gate: FAIL** — 3 new P1 findings:' in text
+
+
+@pytest.mark.parametrize('base', ['no-such-branch', '--output=x'])
+def test_base_errors_exit_with_two_and_issue_no_result(tmp_path, capsys, base):
+    root = repository(tmp_path)
+    assert scan_repo.main([str(root), f'--base={base}']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and 'no result issued' in captured.err
+
+
+def test_base_outside_a_git_repository_exits_with_two(tmp_path, capsys):
+    assert scan_repo.main([str(project(tmp_path, {'a.py': 'x = 1'})), '--base', 'main']) == 2
+    assert 'no result issued' in capsys.readouterr().err
+
+
+def test_the_command_line_scan_needs_none_of_the_web_service_packages():
+    code = ('import sys, scan_repo; '
+            "print(sorted(m for m in ('fastapi', 'uvicorn', 'jwt', 'pydantic', 'dotenv', 'app') if m in sys.modules))")
+    result = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert result.stdout.strip() == '[]', result.stderr
+    required = (ROOT / 'requirements-cli.txt').read_text()
+    assert 'semgrep==1.79.0' in required and 'fastapi' not in required

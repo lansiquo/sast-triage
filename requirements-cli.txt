@@ -1,0 +1,4 @@
+# The command-line scan (scan_repo.py) and the GitHub Action need only these.
+# Semgrep is pinned to the version the rules are tested on.
+semgrep==1.79.0
+certifi>=2024.2.2

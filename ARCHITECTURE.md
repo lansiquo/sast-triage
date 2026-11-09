@@ -1,6 +1,6 @@
 # Architecture
 
-sast-triage is a GitHub App service. It receives pull request webhooks, scans the changed Python, JavaScript and TypeScript files of the exact head commit with service-owned Semgrep rules, labels each finding new or pre-existing from the pull request's diff, ranks it P1–P3, and reports the result as a Check Run that fails only on new P1 findings. `scan_repo.py` runs the same rules, triage and gate on a whole repository from the command line. Deployment steps are in [deploy/README.md](deploy/README.md); trust boundaries and remaining risks are summarized in [SECURITY.md](SECURITY.md).
+sast-triage is a GitHub App service. It receives pull request webhooks, scans the changed Python, JavaScript and TypeScript files of the exact head commit with service-owned Semgrep rules, labels each finding new or pre-existing from the pull request's diff, ranks it P1–P3, and reports the result as a Check Run that fails only on new P1 findings. `scan_repo.py` runs the same rules, triage and gate from the command line, on a whole repository or on what changed since a git ref, and `action.yml` wraps it as a GitHub Action. Deployment steps are in [deploy/README.md](deploy/README.md); trust boundaries and remaining risks are summarized in [SECURITY.md](SECURITY.md).
 
 ```mermaid
 flowchart TD
@@ -36,7 +36,8 @@ flowchart TD
 | `analyzers/semgrep_runner.py` | Stages only the requested files, runs Semgrep (or an explicitly selected Opengrep) on the host or in the Docker sandbox, rejects incomplete output, builds annotations and the summary. Accepts only one local, service-owned rule file. |
 | `analyzers/triage.py` | Supported source files, diff parsing, new/pre-existing labels, test-code detection, P1–P3 and the gate. |
 | `trusted_rules.py` | The 29 service-owned rules: 15 Python, 14 JavaScript and TypeScript. |
-| `scan_repo.py` | Full-repository scan: every supported file outside dependency, build and VCS folders; no diff, so every finding is new. Exit status 1 when the gate fails, 0 when it passes, 2 on an error. |
+| `scan_repo.py` | Command-line scan: every supported file outside dependency, build and VCS folders (every finding new), or with `--base REF` only the files changed since that ref, labelled from a local `git diff` with the pull request rules. Exit status 1 when the gate fails, 0 when it passes, 2 on an error. |
+| `action.yml` | GitHub Action: installs `requirements-cli.txt` with the runner's Python and runs `scan_repo.py` against the pull request's base branch. |
 | `manage_jobs.py`, `queue_maintenance.py`, `job_payload.py` | Operator tools for the durable queue (status, explicit retry, backup and restore) and its payload validators. |
 | `deploy/*.py` | Role configuration check, Linux acceptance runner, container boundary probe, scanner compatibility check, Opengrep signature check. |
 

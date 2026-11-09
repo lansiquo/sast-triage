@@ -27,3 +27,20 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.txt
       - run: make check
+
+  action:
+    name: GitHub Action self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: scan
+        uses: ./
+        continue-on-error: true
+        with:
+          path: tests/fixtures/project
+          base: none
+      - name: The planted P1 must fail the gate
+        run: test "${{ steps.scan.outcome }}" = failure

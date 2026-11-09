@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- **Scan what changed (`scan_repo.py --base REF`).** Scans only the files changed since the merge base of `REF` and `HEAD`, and labels findings new or pre-existing from that diff with the same rules as a pull request, so the command line can gate a branch without the GitHub App. `--markdown FILE` also writes the summary.
+- **GitHub Action (`action.yml`).** Runs `scan_repo.py` on pull requests against the base branch, fails the step on a new P1 and writes the job summary. CI runs it on the `make selfcheck` fixture.
+- **`requirements-cli.txt`.** The scanner-only install (Semgrep 1.79.0 and certifi) for the command line and the Action.
 - **JavaScript and TypeScript.** Pull requests that change `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts` or `.tsx` files are scanned with 14 new service-owned rules (29 in all) for Node and Express: `eval`, the `Function` constructor and string timers, `vm` with dynamic code, `child_process` `exec`/`execSync` with a built command, `node-serialize`, md5/sha1 hashes, `Math.random()` for secrets, disabled TLS verification, cookies without `httpOnly` or `secure`, disabled template autoescaping, MongoDB `$where` and queries taken from `req.*`, open redirects and hard-coded session secrets.
 - Test code also follows JavaScript naming for JavaScript and TypeScript files: a `__tests__`, `spec`, `specs`, `e2e` or `cypress` folder, or a `*.test.*` or `*.spec.*` name. Python files are ranked as before.
 - `scan_repo.py` scans a whole repository with the same rules, triage and gate, and prints the same report as the pull request summary (`--json` for machine-readable output). There is no diff, so every finding counts as new. It skips `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage`, virtualenv folders and `*.min.js` files, and exits 1 when the gate fails, 0 when it passes and 2 on a usage or scanner error.
