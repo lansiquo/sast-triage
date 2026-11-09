@@ -1,24 +1,14 @@
 # sast-triage
 
-A GitHub App service that reviews pull requests with Semgrep, **labels each finding new or pre-existing from the pull request's diff, ranks it P1–P3, and fails the check only on new P1 findings**. A pull request is blocked by what it introduced, not by what was already there.
+A GitHub App service that reviews pull requests with Semgrep. It labels each finding **new** or **pre-existing** from the pull request's diff, ranks it **P1–P3**, and fails the check only on new P1 findings. A pull request is blocked by what it introduced, not by what was already there.
 
-**Status: v1.0.** Runs locally and in its own CI; live GitHub deployment is prepared and not yet complete. Its SCA companion, [sca-triage](https://github.com/lansiquo/sca-triage), ranks npm dependency vulnerabilities by whether your code loads them, using the same P1–P3 scale.
+It runs 15 service-owned rules for high-signal Python patterns. Rules, ignore files and `nosemgrep` comments from the pull request are not used. Findings are review aids, not a security audit. For npm dependencies, see the companion [sca-triage](https://github.com/lansiquo/sca-triage).
 
-## Why
-
-Running Semgrep as a step in a repository's own CI has two problems on pull requests. It reports every finding in the code it scans, including ones the pull request didn't introduce, and the pull request controls its own scan. `sast-triage` runs outside the repository and triages each finding:
-
-| | A Semgrep step in the repo's CI | `sast-triage` |
-|---|---|---|
-| Scans the pull request's code with Semgrep | ✅ | ✅ changed Python files, at the exact head commit |
-| Tells new findings from pre-existing ones | partly: `--baseline-commit` hides pre-existing findings | ✅ labels both, hides neither |
-| Ranks by where the code runs | ❌ severity only | ✅ P1–P3: severity × runtime vs test code |
-| Fails only on what matters | ❌ `--error` fails on any finding | ✅ only new P1 findings |
-| A pull request can't weaken its own scan | ❌ the PR can edit the workflow, ignore files or add `nosemgrep` comments | ✅ service-owned rules; `nosemgrep` is ignored |
+**Status: v1.0.** Runs locally and in its own CI; live GitHub deployment is prepared and not yet complete.
 
 ## Quick start
 
-Requires Python 3.11–3.13. No GitHub account, token, tunnel, or webhook secret is needed.
+Requires Python 3.11–3.13. The tests and demo need no GitHub account, token or network.
 
 ```bash
 git clone https://github.com/lansiquo/sast-triage.git
@@ -26,17 +16,46 @@ cd sast-triage
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-make check        # offline tests, then the demo
 ```
 
-`make test` runs the offline regression suite (278 tests) with outbound HTTP blocked. `make demo` runs real Semgrep on three local fixtures, never executes them, and prints the triage and the resulting GitHub annotation JSON. Scanner or configuration errors exit nonzero.
+```bash
+make test     # offline regression suite (286 tests), outbound HTTP blocked
+make demo     # real Semgrep on local fixtures; prints triage and annotation JSON
+make check    # test, then demo
+```
 
-Make uses `.venv/bin/python` when it exists, otherwise `python3` (override with `PY`). Set `SEMGREP_BIN` to use a specific Semgrep; it fails if that one is unusable.
+To run the webhook service against a GitHub App:
 
-## What the demo shows (real output)
+```bash
+cp .env.example .env   # set GITHUB_WEBHOOK_SECRET, GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY_PATH
+make serve             # http://127.0.0.1:8000, liveness at /health
+```
+
+The app reads `.env` only when `PRSEC_LOAD_DOTENV=1`, which `make serve` sets. Otherwise it takes configuration from the environment. The App needs **pull request** events with Contents read, Pull requests read and Checks write. A real webhook creates real Check Runs, so use a test repository.
+
+## How triage works
+
+**New or pre-existing.** A finding is new if it covers a line the pull request added or changed. Pre-existing findings are still annotated, as notices.
+
+- No diff for a file (too large or unreadable): every finding in it counts as new.
+- Renamed with no changes: unchanged.
+- Renamed or copied from test code to runtime code: every finding counts as new, since its priority went up.
+
+**Priority.**
+
+| | Meaning | On the Check Run |
+|---|---|---|
+| **P1** | High or critical severity in runtime code | Fails the check when new |
+| **P2** | High or critical in test code, or medium in runtime code | Warning when new |
+| **P3** | Everything else | Notice |
+
+Test code follows pytest and Django naming: a `test` or `tests` folder, `test_*.py`, `*_test.py` or `tests.py`. `conftest.py` always counts as runtime code. A rule that rates its own confidence or likelihood `LOW` drops one level.
+
+**Gate.** The check fails only when a finding is both new and P1. Scanner errors and partial results also fail it; only a complete scan can pass.
+
+The demo shows this on one simulated pull request: five findings, one blocker.
 
 ```text
-Pull request (vulnerable.py, test_reports.py): FAILURE
   [P1, new] vulnerable.py:12  py-subprocess-shell-true
   [P1, pre-existing] vulnerable.py:8  py-weak-md5
   [P2, new] test_reports.py:7  py-insecure-deserialization-pickle-loads
@@ -44,122 +63,44 @@ Pull request (vulnerable.py, test_reports.py): FAILURE
   [P3, pre-existing] test_reports.py:11  py-tempfile-mktemp
 **Gate: FAIL** — 1 new P1 finding:
 - `vulnerable.py:12` py-subprocess-shell-true
-
-clean.py: SUCCESS
-**Gate: PASS** — no new P1 findings. Anything else is annotated but doesn't fail the check.
 ```
-
-The demo simulates one pull request that changes a runtime file and a test file. It produces five findings, and each lands somewhere different on the scale:
-
-| Finding | Why | Result |
-|---|---|---|
-| `shell=True` | High severity, runtime code, added by this PR | **P1, new**: fails the check |
-| MD5 | High severity, runtime code, already there | P1, pre-existing: notice |
-| `pickle.loads` | High severity, but in test code | P2, new: warning |
-| `random` for a reset token | Medium severity, runtime code | P2, new: warning |
-| `tempfile.mktemp` | Medium severity, test code, already there | P3, pre-existing: notice |
-
-Five findings, one blocker. A plain Semgrep step with `--error` would fail this pull request and treat all five the same.
-
-## How findings are triaged
-
-| | Meaning | On the Check Run |
-|---|---|---|
-| **P1** | High or critical severity in runtime code | Fails the check when new (red annotation) |
-| **P2** | High or critical in test code, or medium in runtime code | Warning when new |
-| **P3** | Everything else | Notice |
-
-- **New** means the finding covers at least one line the pull request added or changed, read from GitHub's diff for that file. **Pre-existing** findings are still annotated, as notices, but never fail the check.
-- If GitHub sends no diff for a file (it leaves out very large ones) or the diff can't be read, every finding in that file counts as new. A file that was only renamed counts as unchanged, except one renamed or copied from test code to runtime code: every finding in it counts as new, since its priority just went up.
-- **Test code** follows pytest and Django naming: a `test` or `tests` folder, `test_*.py`, `*_test.py` or `tests.py`. `conftest.py` is ranked as runtime code wherever it is, because pytest imports it on every run, before any test is selected.
-- A rule whose metadata rates its own `confidence` or `likelihood` as `LOW` drops one level (P1 to P2, P2 to P3). The 15 bundled rules leave both unset, so they rank by severity alone.
-
-The Check Run title counts the new P1 findings, and the summary shows the gate result and a priority × new/pre-existing table.
-
-## Run it as a GitHub App
-
-1. Configure a GitHub App for **pull request** events with Contents read, Pull requests read, and Checks write permissions.
-2. Copy `.env.example` to `.env` and set a strong webhook secret, the App ID and the path to the App's private key. Keep the key outside the repository.
-3. Run `make serve`. It loads `.env` by setting `PRSEC_LOAD_DOTENV=1`; the app never reads `.env` otherwise, so `uvicorn app:app` on its own takes configuration from the environment only. `/health` reports liveness. The listener binds to loopback and publishes no API docs or OpenAPI schema.
-4. Exposing it through Smee or another tunnel, and installing the App, are separate steps you take yourself. A real webhook **creates real Check Runs**, so use a test repository. This repository never creates grants, installs Apps, changes branch protection or publishes itself.
-
-How it behaves:
-
-- Accepted pull request actions: opened, reopened, synchronize, edited, ready_for_review.
-- HMAC-SHA256 signatures are mandatory. `GITHUB_WEBHOOK_SECRETS` takes comma-separated values for rotation.
-- Responses: 503 when no secret is configured or the scanner is busy, 401 for a bad signature, 400 for a malformed payload, 413 for a body over 1 MiB, 502 for a GitHub setup failure, and 200 when accepted. Results arrive as Check Runs.
-- Only service-owned rules run. Rules and ignore files from the pull request are never used. Whole changed files are scanned at the pull request's head commit.
-- Deleted-only or non-Python changes get a neutral result. Scanner errors and partial results fail the check; they never pass it.
-- Findings are sorted P1 first, capped at 200 annotations, and uploaded in batches of 50.
-
-A durable deployment mode (SQLite job queue, separate worker, rootless Docker sandbox) is prepared; live GitHub deployment is not yet complete. See [deploy/README.md](deploy/README.md).
-
-## Why I built it this way
-
-I wanted a pull request check that answers one question: did this change introduce something serious? Three decisions follow from that.
-
-- **The pull request can't change its own scan.** The rules belong to the service, not the repository, and `nosemgrep` comments are ignored, so a pull request can't edit, skip or suppress the check that reviews it.
-- **Labels can over-report, never hide.** If a diff is missing or unreadable, every finding in that file counts as new, and pre-existing findings are still shown, as notices.
-- **Fail closed.** Scanner errors, partial results and skipped files fail the check. Only a complete scan can pass.
-
-Next is deploying it behind the rootless Docker sandbox designed in `deploy/`.
-
-## Limits
-
-- **Focused Python ruleset.** 15 service-owned rules for high-signal Python patterns: weak hashes, unsafe YAML and pickle loading, shell commands, `eval`/`exec`, disabled TLS verification, insecure randomness and temp files, and unsafe tar extraction. Findings are review aids, not a security audit or proof that code is safe. Pair it with [sca-triage](https://github.com/lansiquo/sca-triage) for npm dependencies and with dedicated tools for secrets, JavaScript and infrastructure.
-- **Pre-existing means untouched, not unrelated.** A change elsewhere, such as a new import, can make an untouched line match, and that finding is still labelled pre-existing.
-- **Size limits fail closed.** Up to a 1 MiB webhook body, a 25 MiB compressed archive, 100 MiB extracted, 10,000 archive members and 3,000 changed files. Larger pull requests fail closed.
-- **Local mode runs jobs in memory.** Up to two scans run at once and nothing is persisted. The durable mode's guarantees and limits are in the [deployment guide](deploy/README.md).
-- **Per-step timeouts.** Semgrep has a timeout and each HTTP request has one; there is no single end-to-end deadline.
-- **Not an OS sandbox when run locally.** Credentials are removed from the scanner's environment and only the selected files are staged, but use a separate unprivileged worker with CPU, memory and disk limits and no network egress before scanning hostile public repositories.
-- **Use the audited service lock for deployments.** `requirements.txt` sets up the developer and demo environment, which has known dependency advisories; `deploy/requirements-service.lock` is the audited service environment.
-
-See [SECURITY.md](SECURITY.md) for the trust boundaries and remaining risks.
-
-## Architecture
-
-```text
-GitHub pull request webhook
-        |
-        v
-app.py ---------------------- verify the HMAC signature, validate the payload
-        |
-        +---> GitHub API ----- changed files and their diffs, head-commit archive
-        |
-        v
-analyzers/semgrep_runner.py - stage the changed .py files, run Semgrep with
-        |                     the service-owned rules in trusted_rules.py
-        v
-analyzers/triage.py --------- new vs pre-existing, P1 / P2 / P3, pass or fail
-        |
-        v
-GitHub Check Run (annotations, summary, conclusion)
-```
-
-- `app.py` receives and verifies webhooks, downloads the pull request's head commit, lists the changed files with their diffs, runs the pipeline and completes the Check Run.
-- `analyzers/semgrep_runner.py` stages only the changed Python files, runs Semgrep without the service's credentials, rejects incomplete output, and builds the annotations and summary.
-- `analyzers/triage.py` reads the diffs, labels each finding new or pre-existing, assigns P1/P2/P3 and decides pass or fail.
-- `trusted_rules.py` holds the 15 service-owned Semgrep rules.
-- `worker.py`, `job_store.py` and `job_payload.py` are the durable mode: a SQLite job queue and a separate scanning worker. `manage_jobs.py` and `queue_maintenance.py` are operator tools for it.
 
 ## Local interactive showcase
 
-Run `.venv/bin/python demo_web.py` and open http://127.0.0.1:8765 to step through ten OWASP Top 10:2025 examples. Four run real Semgrep scans with a small demo ruleset (`demo_rules.py`), and six run behavioral tests on authored fixtures in isolated child processes. The pull request view is simulated, and only bundled fixtures are accepted. Stop it with Ctrl+C. See [the showcase guide](deploy/local-showcase.md).
+```bash
+.venv/bin/python demo_web.py   # http://127.0.0.1:8765
+```
+
+Steps through ten OWASP Top 10:2025 examples: four run real Semgrep scans, six run behavioral tests on bundled fixtures. The pull request view is simulated. See [deploy/local-showcase.md](deploy/local-showcase.md).
 
 ## Layout
 
-```text
-app.py                       webhook service and scan pipeline
-analyzers/                   Semgrep runner and triage
-trusted_rules.py             the 15 service-owned rules
-worker.py, job_store.py      durable mode (SQLite queue, separate worker)
-demo.py                      offline demo (make demo)
-demo_web.py, demo/           local interactive showcase
-tests/                       offline regression suite (make test)
-deploy/                      prepared deployment design, runbooks and evidence
-rules/                       early starter rules, not used by the service
-.github/workflows/ci.yml     runs make check on every pull request and push to main
-.github/branch-protect*/     earlier branch-protection and workflow examples, not applied
-```
+| Path | Contents |
+|---|---|
+| `app.py` | Webhook service and scan pipeline |
+| `analyzers/` | Semgrep runner and triage |
+| `trusted_rules.py` | The 15 service-owned rules |
+| `rules/` | Extra Semgrep rule packs for manual scans; the service does not load them |
+| `worker.py`, `job_store.py` | Durable mode: SQLite queue and separate worker |
+| `demo.py` | Offline demo (`make demo`) |
+| `demo_web.py`, `demo/` | Local interactive showcase |
+| `tests/` | Offline regression suite (`make test`) |
+| `deploy/` | Prepared deployment design, runbooks and evidence |
+| `.github/workflows/ci.yml` | Runs `make check` on every pull request and push to main |
 
-Write-up: [dotrobin.dev/sast-triage](https://dotrobin.dev/sast-triage.html)
+## Scope and limits
+
+- **Pre-existing means untouched, not unrelated.** A change elsewhere (for example, a new import) can make an untouched line match; that finding stays pre-existing and doesn't fail the check.
+- **Size limits fail closed:** 1 MiB webhook body, 25 MiB archive, 100 MiB extracted, 10,000 archive members, 3,000 changed files.
+- **Local mode is not an OS sandbox.** It strips credentials from the scanner and stages only the selected files. Before scanning untrusted public repositories, use the durable mode's isolated worker.
+
+## Deployment
+
+The durable mode and rootless Docker sandbox are prepared but not live. See [deploy/README.md](deploy/README.md).
+
+## More
+
+- [SECURITY.md](SECURITY.md): trust boundaries and remaining risks
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup
+- Write-up: [dotrobin.dev/sast-triage](https://dotrobin.dev/sast-triage.html)
+- [Browser demo](https://dotrobin.dev/demos/sast.html): ten curated OWASP Top 10:2025 examples, triaged in the browser with no setup and no scanning

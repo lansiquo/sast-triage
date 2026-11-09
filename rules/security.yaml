@@ -133,7 +133,7 @@ rules:
     pattern-either:
       - pattern: child_process.exec($CMD, ...)
       - pattern: child_process.execSync($CMD, ...)
-      - pattern: child_process.spawn($CMD, ..., {shell: true, ...})
+      - pattern: "child_process.spawn($CMD, ..., {shell: true, ...})"
       - pattern: require('child_process').exec($CMD, ...)
       - pattern: require('child_process').execSync($CMD, ...)
     metadata:
@@ -152,7 +152,7 @@ rules:
     message: "dangerouslySetInnerHTML requires strict sanitization."
     severity: WARNING
     languages: [javascript, typescript]
-    pattern: < $COMP dangerouslySetInnerHTML = {{ __html: $X }} ... />
+    pattern: '<$COMP dangerouslySetInnerHTML={{__html: $X}} />'
     metadata:
       cwe: ["CWE-79"]
 
@@ -238,9 +238,11 @@ rules:
     severity: WARNING
     languages: [yaml]
     patterns:
-      - pattern: uses: $OWNER/$REPO@$TAG
-      - pattern-not: uses: $OWNER/$REPO@sha256:$SHA
-      - pattern-not: uses: $OWNER/$REPO@$SHA
+      - pattern: "uses: $USES"
+      # Remote actions (owner/repo[/path]@ref) whose ref is not a full 40-character commit SHA.
+      - metavariable-regex:
+          metavariable: $USES
+          regex: '^[^./][^@\s]*@(?![0-9a-f]{40}$)'
     metadata:
       refs: ["https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"]
       cwe: ["CWE-494"]
