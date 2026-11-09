@@ -139,7 +139,7 @@ In a workflow that runs on `pull_request`:
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0               # the base branch's history, to diff against it
-- uses: lansiquo/sast-triage@main
+- uses: lansiquo/sast-triage@v2.0.0
   with:
     path: .                      # directory to scan
     base: ""                     # default: the pull request's base branch; "none" for a full scan
@@ -148,7 +148,8 @@ In a workflow that runs on `pull_request`:
 Both inputs are optional (defaults shown). On a pull request it scans the files changed since the base
 branch; on other events, or with `base: none`, it scans everything. The step fails when the gate fails and
 adds the summary to the job summary. It installs only `requirements-cli.txt` with the runner's Python and
-uses no other actions. Pin a full commit SHA instead of `@main` for the strictest supply-chain safety.
+uses no other actions. Pin a release tag such as `@v2.0.0`, or a full commit SHA for the strictest
+supply-chain safety.
 
 ## How triage works
 
@@ -219,6 +220,9 @@ make serve             # http://127.0.0.1:8000, liveness at /health
 The app reads `.env` only when `PRSEC_LOAD_DOTENV=1`, which `make serve` sets. Otherwise it takes
 configuration from the environment. Register your own GitHub App with **pull request** events and Contents
 read, Pull requests read and Checks write. A real webhook creates real Check Runs, so use a test repository.
+
+> **Changed since v1.0.0:** the app reads `.env` only when `PRSEC_LOAD_DOTENV=1`, and the scanner
+> accepts only its own local rule file, so Semgrep registry IDs, `auto` and URLs fail the scan.
 
 This local mode scans in the web process, two at a time. The durable mode (SQLite queue, separate worker,
 rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy/README.md).
