@@ -1,6 +1,6 @@
 # Minimum production acceptance gates
 
-No production deployment is approved by local/demo test success. An approved Linux VM can be used before the mini PC arrives; do not install/configure a runtime or transfer secrets without authorization.
+No production deployment is approved by local test success. An approved Linux VM can be used before the mini PC arrives; do not install/configure a runtime or transfer secrets without authorization.
 
 1. **Scanner release gate.** Obtain a supported Semgrep distribution permitting the patched dependencies; verify its provenance and audit the complete final Linux image/SBOM. Current latest 1.182.1 still pins affected MCP/OpenTelemetry versions. Record the immutable digest. Do not override dependencies, suppress advisories, or treat containment as remediation.
 2. **Approved isolated host.** Provision separate non-root web and worker identities, a queue-only shared group/directory (2770), protected worker-owned PEM and a worker-owned rootless Docker daemon. The web identity must be unable to read the PEM or access the Docker socket. Keep vulnerable labs separate. This setup requires host/security/secret-placement approval.

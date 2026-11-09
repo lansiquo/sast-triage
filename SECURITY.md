@@ -7,7 +7,7 @@ sast-triage runs locally and in its own CI; live GitHub deployment is prepared b
 - **Webhook sender:** every event needs a valid HMAC-SHA256 signature over the exact body (constant-time, rotation supported). No secret, no processing.
 - **PR author:** repository content is untrusted and never executed. Unsafe archives (traversal, links, special files, duplicates, multiple roots) are rejected, and size limits fail closed.
 - **Scanner:** only changed Python, JavaScript and TypeScript files are staged; PR rules, ignore files, Git metadata and credentials are excluded, and `nosemgrep` is ignored. Scanner errors cannot pass a check.
-- **GitHub:** API credentials stay in the parent process; TLS verification stays on. Tests and the offline demo make no GitHub calls.
+- **GitHub:** API credentials stay in the parent process; TLS verification stays on. Tests and full-repository scans make no GitHub calls.
 
 ## Remaining risks
 

@@ -1,6 +1,6 @@
 # Production operations and acceptance
 
-These are local implementation improvements, not evidence of a live deployment. No GitHub webhook subscription, permissions, credential placement or remote Checks were changed. The existing demo remains a separate process.
+These are local implementation improvements, not evidence of a live deployment. No GitHub webhook subscription, permissions, credential placement or remote Checks were changed.
 
 ## Base-branch changes and durable fanout
 

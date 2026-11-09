@@ -10,7 +10,7 @@ The same rules, triage and gate also run on a whole repository from the command 
 
 ## Quick start
 
-Requires Python 3.11–3.14. `requirements.txt` resolves to Semgrep 1.79.0: newer Semgrep pins `opentelemetry-api` below the version current FastAPI needs, and forcing it would also pull in `mcp` and `opentelemetry-api` releases with known advisories. Set `SEMGREP_BIN` to use another Semgrep. The tests, the demo and full-repository scans need no GitHub account, token or network.
+Requires Python 3.11–3.14. `requirements.txt` resolves to Semgrep 1.79.0: newer Semgrep pins `opentelemetry-api` below the version current FastAPI needs, and forcing it would also pull in `mcp` and `opentelemetry-api` releases with known advisories. Set `SEMGREP_BIN` to use another Semgrep. The tests and full-repository scans need no GitHub account, token or network.
 
 ```bash
 git clone https://github.com/lansiquo/sast-triage.git
@@ -21,9 +21,9 @@ python -m pip install -r requirements.txt
 ```
 
 ```bash
-make test     # offline regression suite (176 tests), outbound HTTP blocked
-make demo     # a small built-in pull request example; prints triage and annotation JSON
-make check    # test, then demo
+make test       # offline regression suite (159 tests), outbound HTTP blocked
+make selfcheck  # full-repository scan of a three-file fixture; passes when its planted P1 fails the gate
+make check      # test, then selfcheck (what CI runs)
 ```
 
 To scan a whole repository, run `scan_repo.py` on its folder (see the NodeGoat example below):
@@ -115,8 +115,6 @@ Full scan (44 files): FAILURE
 
 **Missed:** log injection (A1), plain-text passwords (A2), insecure direct object references (A4), missing security headers (A5), plain HTTP (A6), missing access control on `/benefits` (A7), CSRF (A8), vulnerable dependencies (A9, see [sca-triage](https://github.com/lansiquo/sca-triage)), server-side request forgery in `research.js` and a ReDoS-prone regex in `profile.js`. No rule covers them, and HTML templates are not scanned. The rules also match within one file, so a request value passed to another module before it reaches a query is not traced.
 
-`make demo` runs a small built-in example instead: one simulated Python pull request, where a new P1 fails the check and a pre-existing one does not.
-
 ## Rules
 
 `trusted_rules.py` holds all 29 service-owned rules. Rule severity ERROR is high and WARNING is medium.
@@ -142,14 +140,6 @@ Full scan (44 files): FAILURE
 | `js-open-redirect` | medium | 601 | `res.redirect()` to a target that starts with `req.query`, `req.params`, `req.body` or `req.param()` |
 | `js-hardcoded-session-secret` | high | 798 | a literal secret for `express-session`, `cookie-session` or `cookieParser`, or a literal `cookieSecret` or `sessionSecret` |
 
-## Local interactive showcase
-
-```bash
-.venv/bin/python demo_web.py   # http://127.0.0.1:8765
-```
-
-Steps through ten OWASP Top 10:2025 examples: four run real Semgrep scans, six run behavioral tests on bundled fixtures. The pull request view is simulated. See [deploy/local-showcase.md](deploy/local-showcase.md).
-
 ## Layout
 
 | Path | Contents |
@@ -160,9 +150,7 @@ Steps through ten OWASP Top 10:2025 examples: four run real Semgrep scans, six r
 | `scan_repo.py` | Full-repository scan from the command line |
 | `rules/` | Extra Semgrep rule packs for manual scans; the service does not load them |
 | `worker.py`, `job_store.py` | Durable mode: SQLite queue and separate worker |
-| `demo.py` | Offline demo (`make demo`) |
-| `demo_web.py`, `demo/` | Local interactive showcase |
-| `tests/` | Offline regression suite (`make test`) |
+| `tests/` | Offline regression suite (`make test`); `tests/fixtures/project` is the `make selfcheck` fixture |
 | `deploy/` | Prepared deployment design, runbooks and evidence |
 | `docs/branch-protection/` | Branch protection that makes the check required, for a repository that uses the App |
 | `.github/workflows/ci.yml` | Runs `make check` on every pull request and push to main |
@@ -183,4 +171,3 @@ The durable mode and rootless Docker sandbox are prepared but not live. See [dep
 - [SECURITY.md](SECURITY.md): trust boundaries and remaining risks
 - [CONTRIBUTING.md](CONTRIBUTING.md): development setup
 - Write-up: [dotrobin.dev/sast-triage](https://dotrobin.dev/sast-triage.html)
-- [Browser demo](https://dotrobin.dev/demos/sast.html): ten curated OWASP Top 10:2025 examples, triaged in the browser with no setup and no scanning

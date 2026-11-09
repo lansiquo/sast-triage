@@ -18,7 +18,6 @@ from pathlib import Path
 
 from analyzers.semgrep_runner import SemgrepInvocationError, run_semgrep, summarize_findings
 from analyzers.triage import gate, is_source_path, triage
-from demo import print_summary
 from trusted_rules import OFFLINE_RULESET
 
 # Dependencies, build output and VCS metadata. The runner never scans the
@@ -41,6 +40,15 @@ def source_files(root: Path):
             if is_source_path(name) and not MINIFIED.search(name) and not path.is_symlink() and path.is_file():
                 found.append(path.relative_to(root).as_posix())
     return sorted(found)
+
+
+def print_summary(title, findings, conclusion):
+    """One line per triaged finding, then the Check Run's Markdown summary with the gate result."""
+    print(f'\n{title}: {conclusion.upper()}')
+    for f in findings:
+        label = 'new' if f['new'] else 'pre-existing'
+        print(f"  [{f['priority']}, {label}] {f['path']}:{f['start_line']}  {f['rule_id']}")
+    print(summarize_findings(findings)[1])
 
 
 def main(argv=None):

@@ -1,20 +1,47 @@
 """Live Semgrep checks for the service-owned rules. Every snippet is its own file in one scan; nothing is executed."""
+import difflib
 from pathlib import Path
 
 import pytest
 import yaml
 
 from analyzers.semgrep_runner import run_semgrep
+from analyzers.triage import added_lines, gate, triage
 from trusted_rules import OFFLINE_RULESET
 
 RULES = yaml.safe_load(OFFLINE_RULESET)['rules']
+PYTHON_RULES = {rule['id'] for rule in RULES if rule['languages'] == ['python']}
 JAVASCRIPT_RULES = {rule['id'] for rule in RULES if rule['languages'] == ['javascript', 'typescript']}
 
 # rule: (snippets it must report, snippets that must produce no finding at all)
+PYTHON_CASES = {
+    'py-weak-md5': (['hashlib.md5(data)', 'hashlib.md5(data)  # nosemgrep'], ['hashlib.sha256(data)']),
+    'py-weak-sha1': (['hashlib.sha1(data).hexdigest()'], ['hashlib.sha512(data)']),
+    'py-unsafe-yaml-load': (['yaml.load(text)', 'yaml.load(text, Loader=yaml.Loader)'],
+                            ['yaml.load(text, Loader=yaml.SafeLoader)', 'yaml.safe_load(text)']),
+    'py-unsafe-yaml-unsafe-load': (['yaml.unsafe_load(text)'], ['yaml.safe_dump(data)']),
+    'py-insecure-deserialization-pickle-loads': (['pickle.loads(blob)'], ['pickle.dumps(obj)']),
+    'py-insecure-deserialization-pickle-load': (['pickle.load(stream)'], ['json.load(stream)']),
+    'py-os-system': (['os.system(cmd)'], ['os.getcwd()']),
+    'py-os-popen': (['os.popen(cmd)', 'os.popen3(cmd)'], ['os.path.join(a, b)']),
+    'py-subprocess-shell-true': (['subprocess.run(cmd, shell=True)', 'subprocess.check_output(cmd, shell=True)'],
+                                 ["subprocess.run(['git', 'log'], check=True)", 'subprocess.run(cmd, shell=False)']),
+    'py-dangerous-eval': (['eval(expr)'], ['ast.literal_eval(expr)']),
+    'py-dangerous-exec': (['exec(code)'], ['executor.submit(job)']),
+    'py-requests-disable-verify': (['requests.get(url, verify=False)', 'requests.post(url, data=d, verify=False)'],
+                                   ['requests.get(url, timeout=5)', 'requests.get(url, verify=True)']),
+    'py-random-for-secrets': (['random.randint(100000, 999999)'], ['secrets.token_hex(16)']),
+    'py-tempfile-mktemp': (['tempfile.mktemp()'], ['tempfile.mkstemp()']),
+    'py-tarfile-extractall': (['tarfile.open(path).extractall(dest)',
+                               'with tarfile.open(path) as archive:\n    archive.extractall(dest)'],
+                              ['tarfile.open(path).getnames()']),
+}
+
 JAVASCRIPT_CASES = {
     'js-dangerous-eval': ([
         'const total = eval(req.body.preTax);',
         'eval(`${a} + ${b}`);',
+        'eval(code); // nosemgrep',   # suppression comments in scanned code are ignored
     ], [
         'eval("1 + 1");',
         'redis.eval(script, 0);',
@@ -73,7 +100,7 @@ JAVASCRIPT_CASES = {
         'const otp = Math.floor(100000 + Math.random() * 900000);',
         'function generateToken() {\n  return Math.random().toString(36);\n}',
     ], [
-        'const stocks = Math.floor((Math.random() * 40) + 1);',   # NodeGoat's demo data
+        'const stocks = Math.floor((Math.random() * 40) + 1);',   # NodeGoat's sample portfolio
         'const tokenIndex = Math.floor(Math.random() * tokens.length);',
         'const footprint = Math.random();',
         "const resetToken = crypto.randomBytes(32).toString('hex');",
@@ -200,14 +227,15 @@ def test_ruleset_counts_and_metadata():
     assert '29 service-owned rules' in readme
 
 
-def test_every_javascript_rule_has_positive_and_negative_examples(tmp_path, monkeypatch):
-    assert set(JAVASCRIPT_CASES) == JAVASCRIPT_RULES
+def test_every_rule_has_positive_and_negative_examples(tmp_path, monkeypatch):
+    assert set(PYTHON_CASES) == PYTHON_RULES and set(JAVASCRIPT_CASES) == JAVASCRIPT_RULES
     sources, expected = {}, {}
-    for rule, (positives, negatives) in JAVASCRIPT_CASES.items():
+    for rule, (positives, negatives) in {**PYTHON_CASES, **JAVASCRIPT_CASES}.items():
         assert positives and negatives, rule
+        extension = '.py' if rule in PYTHON_RULES else '.js'
         for kind, snippets in (('match', positives), ('clean', negatives)):
             for index, source in enumerate(snippets):
-                name = f'{rule}/{kind}_{index}.js'
+                name = f'{rule}/{kind}_{index}{extension}'
                 sources[name], expected[name] = source, ({rule} if kind == 'match' else set())
     found = scan(tmp_path, monkeypatch, sources)
     assert {name: (sources[name], rules) for name, rules in found.items()} == \
@@ -243,3 +271,53 @@ def test_files_in_folders_semgrep_ignores_by_default_are_still_scanned(tmp_path,
     sources['tests/test_case.py'] = 'eval(code)'
     found = scan(tmp_path, monkeypatch, sources)
     assert found == {name: {'py-dangerous-eval' if name.endswith('.py') else 'js-dangerous-eval'} for name in sources}
+
+
+# A pull request, scanned for real and triaged against its diff: (old source, new source).
+PULL_REQUEST = {
+    'reports.py': (
+        'import hashlib\n\n\ndef digest(data):\n    return hashlib.md5(data).hexdigest()\n',
+        'import hashlib\nimport random\nimport subprocess\n\n\ndef digest(data):\n    return hashlib.md5(data).hexdigest()\n'
+        '\n\ndef run(cmd):\n    return subprocess.run(cmd, shell=True)\n'
+        '\n\ndef reset_code():\n    return str(random.randint(100000, 999999))\n'),
+    'tests/test_reports.py': (
+        'import tempfile\n\n\ndef scratch():\n    return tempfile.mktemp()\n',
+        'import pickle\nimport tempfile\n\n\ndef load(blob):\n    return pickle.loads(blob)\n'
+        '\n\ndef scratch():\n    return tempfile.mktemp()\n'),
+    'routes/learn.js': (
+        'app.get("/learn", (req, res) => res.redirect(req.query.url));\n',
+        'app.get("/learn", (req, res) => res.redirect(req.query.url));\n'
+        'app.post("/total", (req, res) => res.json(eval(req.body.total)));\n'),
+    '__tests__/learn.test.js': ('', 'test("total", () => expect(eval(fixture)).toBe(2));\n'),
+}
+PULL_REQUEST_TRIAGE = {
+    ('reports.py', 'py-subprocess-shell-true'): ('P1', True),                       # fails the check
+    ('reports.py', 'py-weak-md5'): ('P1', False),                                   # already there: notice
+    ('reports.py', 'py-random-for-secrets'): ('P2', True),                          # medium in runtime code
+    ('tests/test_reports.py', 'py-insecure-deserialization-pickle-loads'): ('P2', True),   # high in test code
+    ('tests/test_reports.py', 'py-tempfile-mktemp'): ('P3', False),                 # medium in test code
+    ('routes/learn.js', 'js-dangerous-eval'): ('P1', True),
+    ('routes/learn.js', 'js-open-redirect'): ('P2', False),
+    ('__tests__/learn.test.js', 'js-dangerous-eval'): ('P2', True),                 # JavaScript test naming
+}
+
+
+def patch(old, new):
+    """GitHub's `patch` field: the unified diff's hunks without file headers."""
+    rows = difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm='')
+    return '\n'.join(list(rows)[2:])
+
+
+def test_a_pull_request_is_scanned_and_triaged_against_its_diff(tmp_path, monkeypatch):
+    monkeypatch.setenv('PRSEC_MODE', 'local')
+    monkeypatch.setenv('PRSEC_SCANNER_BACKEND', 'local')
+    for name, (_, source) in PULL_REQUEST.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(source)
+    rules = tmp_path.parent / f'{tmp_path.name}-rules.yaml'
+    rules.write_text(OFFLINE_RULESET)
+    findings = triage(run_semgrep(sorted(PULL_REQUEST), str(tmp_path), config=str(rules)),
+                      {name: added_lines(patch(old, new)) for name, (old, new) in PULL_REQUEST.items()})
+    assert {(f['path'], f['rule_id']): (f['priority'], f['new']) for f in findings} == PULL_REQUEST_TRIAGE
+    assert gate(findings) == 'failure'
+    assert [f['priority'] for f in findings] == sorted(f['priority'] for f in findings)

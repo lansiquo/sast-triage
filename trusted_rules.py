@@ -1,4 +1,4 @@
-"""Service-owned rules for Python, JavaScript and TypeScript, shared with the credential-free local showcase."""
+"""Service-owned Semgrep rules for Python, JavaScript and TypeScript: the only rules any scan uses."""
 OFFLINE_RULESET = r"""
 rules:
   # Crypto: weak hashes

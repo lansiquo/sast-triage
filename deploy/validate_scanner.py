@@ -9,8 +9,8 @@ from app import OFFLINE_RULESET
 from analyzers.semgrep_runner import run_semgrep
 
 SOURCE = '''import hashlib, os, pickle, random, subprocess, tarfile, tempfile, yaml
-hashlib.md5(b"demo")  # nosemgrep
-hashlib.sha1(b"demo")
+hashlib.md5(b"sample")  # nosemgrep
+hashlib.sha1(b"sample")
 yaml.load("example")
 yaml.unsafe_load("example")
 pickle.loads(b"example")
@@ -60,7 +60,7 @@ def main():
         root=Path(temporary)
         (root/'all_rules.py').write_text(SOURCE)
         (root/'all_rules.js').write_text(JS_SOURCE)
-        (root/'clean.py').write_text('import hashlib\nhashlib.sha256(b"demo")\n')
+        (root/'clean.py').write_text('import hashlib\nhashlib.sha256(b"sample")\n')
         (root/'clean.js').write_text('const crypto = require("crypto");\ncrypto.createHash("sha256");\n')
         rules=root/'trusted.yml';rules.write_text(OFFLINE_RULESET)
         findings=run_semgrep(['all_rules.py','all_rules.js'],str(root),config=str(rules))

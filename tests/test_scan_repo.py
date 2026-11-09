@@ -110,9 +110,11 @@ def test_symbolic_links_are_not_followed(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)['files'] == ['app.js']
 
 
-def test_command_line_exit_status(tmp_path):
-    root = project(tmp_path, {'app.js': 'eval(req.query.code);'})
-    result = subprocess.run([sys.executable, str(ROOT / 'scan_repo.py'), str(root)], cwd=ROOT,
+def test_command_line_on_the_make_check_fixture():
+    # `make check` runs this command and expects exit status 1: the planted P1 fails the gate.
+    result = subprocess.run([sys.executable, 'scan_repo.py', 'tests/fixtures/project'], cwd=ROOT,
                             capture_output=True, text=True, timeout=300)
     assert result.returncode == 1, result.stderr
-    assert '[P1, new] app.js:1  js-dangerous-eval' in result.stdout
+    assert '3 Python, JavaScript and TypeScript files, 29 service-owned rules.' in result.stdout
+    assert '  [P1, new] server.js:2  js-dangerous-eval\n  [P2, new] __tests__/server.test.js:2  js-dangerous-eval\n' \
+        in result.stdout

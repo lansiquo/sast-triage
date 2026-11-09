@@ -4,6 +4,6 @@
    ```bash
    python3 -m venv .venv && source .venv/bin/activate
    python -m pip install -r requirements.txt
-   make check        # offline tests, then the demo
+   make check        # offline tests, then a full-repository scan self-check
    ```
 3. Keep `make check` passing. CI runs it on every pull request and push to main.

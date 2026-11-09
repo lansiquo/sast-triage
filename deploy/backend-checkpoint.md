@@ -1,6 +1,6 @@
 # Production backend checkpoint
 
-These changes affect the real webhook/worker path, separately from the local showcase. No GitHub writes, deployment, or credential changes were performed during validation.
+These changes affect the real webhook/worker path. No GitHub writes, deployment, or credential changes were performed during validation.
 
 ## Concrete fixes
 
@@ -9,7 +9,7 @@ These changes affect the real webhook/worker path, separately from the local sho
 - **Fail closed on missing source and malformed file listings.** Explicitly removed files are excluded from GitHub’s file list; other changed Python files must exist in the immutable snapshot. A missing file or malformed response cannot turn into a neutral or clean scan.
 - **Keep private exception messages out of logs.** Authentication refresh, token acquisition, Check creation and payload-parsing errors log only exception types.
 
-Historical validation: `make check` passed 118 tests plus the original live CLI scanner demo. New tests exercise HTTP rate-limit handling with controlled responses, real persistent SQLite cooldown across restart and multiple jobs, the actual worker loop, deferred completion, post-scan head changes/closure, missing snapshots, malformed/deleted file lists, and secret-sentinel logging. GitHub calls and Docker preflight remain mocked; this is not live GitHub end-to-end or real container-boundary validation.
+Historical validation: `make check` passed 118 tests plus a live scan of the vulnerable and clean scanner fixtures. New tests exercise HTTP rate-limit handling with controlled responses, real persistent SQLite cooldown across restart and multiple jobs, the actual worker loop, deferred completion, post-scan head changes/closure, missing snapshots, malformed/deleted file lists, and secret-sentinel logging. GitHub calls and Docker preflight remain mocked; this is not live GitHub end-to-end or real container-boundary validation.
 
 GitHub rate-limit behavior follows https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately . No sleeping network call is added to a webhook handler; the worker's persisted scheduling handles the wait.
 
