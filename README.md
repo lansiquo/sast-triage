@@ -19,7 +19,7 @@ python -m pip install -r requirements.txt
 ```
 
 ```bash
-make test     # offline regression suite (278 tests), outbound HTTP blocked
+make test     # offline regression suite (286 tests), outbound HTTP blocked
 make demo     # real Semgrep on local fixtures; prints triage and annotation JSON
 make check    # test, then demo
 ```
@@ -80,6 +80,7 @@ Steps through ten OWASP Top 10:2025 examples: four run real Semgrep scans, six r
 | `app.py` | Webhook service and scan pipeline |
 | `analyzers/` | Semgrep runner and triage |
 | `trusted_rules.py` | The 15 service-owned rules |
+| `rules/` | Extra Semgrep rule packs for manual scans; the service does not load them |
 | `worker.py`, `job_store.py` | Durable mode: SQLite queue and separate worker |
 | `demo.py` | Offline demo (`make demo`) |
 | `demo_web.py`, `demo/` | Local interactive showcase |
