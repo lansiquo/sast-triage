@@ -56,22 +56,7 @@ Upgrading from 1.0.0: the app reads `.env` only when `PRSEC_LOAD_DOTENV=1` (`mak
 ### Removed
 - Tracked `.DS_Store` and `__pycache__` files, which `.gitignore` already covers.
 
-## [v0.1.0] - 2025-09-21
-### Added
-- Initial tag and first protected merge baseline.
-
-## [v0.1.1] - 2025-09-21
-### Added
-- Repository foundations: `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`.
-- **Makefile** targets: `setup`, `lint`, `test`, `scan`, `protect`, `unprotect`, `release`.
-- **Branch protection config** (`.github/branch-protection/protection.json`).
-- **CODEOWNERS** for future review routing.
-
-### Changed
-- Enforced **admins included**, **no force pushes**, **no deletions** on `main`.
-
-
-## [v0.1.2] - 2025-09-21
+## [0.1.2] - 2025-09-21
 ### Added
 - **CI security gate**: GitHub Actions workflow **RobinSec / RobinSec** using `semgrep ci` (PR-aware), with
   explicit permissions, concurrency cancel, job timeout, and SARIF upload to the Security tab.
@@ -89,3 +74,17 @@ Upgrading from 1.0.0: the app reads `.env` only when `PRSEC_LOAD_DOTENV=1` (`mak
 ### Fixed
 - Resolved hanging checks by aligning the required context to the workflow/job name and ensuring the
   job always completes (timeouts + `semgrep ci`).
+
+## [0.1.1] - 2025-09-21
+### Added
+- Repository foundations: `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`.
+- **Makefile** targets: `setup`, `lint`, `test`, `scan`, `protect`, `unprotect`, `release`.
+- **Branch protection config** (`.github/branch-protection/protection.json`).
+- **CODEOWNERS** for future review routing.
+
+### Changed
+- Enforced **admins included**, **no force pushes**, **no deletions** on `main`.
+
+## [0.1.0] - 2025-09-21
+### Added
+- Initial tag and first protected merge baseline.
