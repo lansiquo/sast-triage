@@ -17,10 +17,10 @@ flowchart TD
     W --> SCAN
     subgraph SCAN["Scan pipeline (app.py)"]
         TOK["Installation token<br/>one repo, 3 permissions"] --> CHK["Check Run in progress"]
-        CHK --> TAR["Head-commit tarball<br/>bounded, safe extraction"]
-        TAR --> FILES["Changed files + diffs<br/>.py .js .jsx .mjs .cjs .ts .tsx"]
-        FILES --> SG["Semgrep, service-owned rules only<br/>host subprocess or rootless Docker"]
-        SG --> BASE["Base versions of the same files<br/>merge-base tarball, scanned the same way"]
+        CHK --> FILES["Changed files + diffs<br/>.py .js .jsx .mjs .cjs .ts .tsx"]
+        FILES --> FETCH["Only those files at the head commit<br/>contents API, 1 MiB each, no archive"]
+        FETCH --> SG["Semgrep, service-owned rules only<br/>host subprocess or rootless Docker"]
+        SG --> BASE["Base versions of the same files<br/>fetched at the merge base, scanned the same way"]
         BASE --> TRI["Triage: new / pre-existing,<br/>P1–P3, gate"]
         TRI --> ANN["Complete Check Run<br/>summary + up to 200 annotations"]
     end
@@ -31,7 +31,7 @@ flowchart TD
 
 | File | Responsibility |
 |---|---|
-| `app.py` | FastAPI app: `/webhook`, `/health`, `/ready`. Body limit, HMAC check, payload and scope validation; local scans or durable enqueue. Also the GitHub client (App JWT, narrowed installation tokens, rate-limit detection, Check Run updates in batches of 50), the tarball download and extraction, and the scan pipeline. |
+| `app.py` | FastAPI app: `/webhook`, `/health`, `/ready`. Body limit, HMAC check, payload and scope validation; local scans or durable enqueue. Also the GitHub client (App JWT, narrowed installation tokens, rate-limit detection, Check Run updates in batches of 50), fetching the changed files one by one at the head commit and the merge base, and the scan pipeline. |
 | `job_store.py` | Durable mode's SQLite queue: idempotent enqueue, claim, retry with backoff, global rate-limit cooldown, recovery, heartbeat and status. |
 | `worker.py` | Durable mode's worker: drains the queue under an exclusive file lock, runs the pipeline and decides retry or failure. |
 | `analyzers/semgrep_runner.py` | Stages only the requested files, runs Semgrep (or an explicitly selected Opengrep) on the host or in the Docker sandbox, rejects incomplete output, keeps one finding per file, line and CWE (the most severe), builds annotations and the summary. Accepts only one local, service-owned rule file. |
@@ -78,7 +78,7 @@ flowchart TD
 
 - Mandatory webhook signature, 1 MiB body limit, no API docs or OpenAPI schema, `.env` read only when `PRSEC_LOAD_DOTENV=1`.
 - One repository and installation per deployment; installation tokens are narrowed to that repository with Contents read, Pull requests read and Checks write.
-- Archives: 25 MiB compressed, 100 MiB extracted, 10,000 members, a single root directory, regular files and directories only, no absolute, `..` or duplicate paths, 60 s download deadline. Changed-file paths must stay inside the snapshot.
+- Files: only the changed Python, JavaScript and TypeScript files are downloaded, one contents API call each, at most 500 per version; no repository archive is fetched or unpacked. Paths must be relative with no `..` or backslash, and GitHub must answer with a regular file at exactly that path, of at most 1 MiB: a symbolic link, submodule, directory, larger file or malformed answer fails the check (for a base version, the file is left out and its findings count as new).
 - Scanner: exactly one absolute, local rule file outside the scanned tree (no `auto`, registry IDs or URLs), metrics and version checks off, inline suppression disabled, one job, 1 MiB per file, bounded output and timeout.
 - Docker sandbox: `--pull=never`, `--network=none`, `--read-only`, `--cap-drop=ALL`, `no-new-privileges`, UID/GID 65532, 1 CPU, 768 MiB memory and swap, 128 PIDs, read-only mounts for the staged files and rules; container removal is confirmed after every scan.
 - Logs carry job ids, status codes and exception types, never tokens, payloads or response bodies.

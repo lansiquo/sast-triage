@@ -186,46 +186,6 @@ def test_changed_file_list_stops_at_an_empty_page_and_fails_past_the_page_limit(
     assert requested == list(range(1, 31))
 
 
-# ---------- Archive ----------
-
-def tarball(*names):
-    data = io.BytesIO()
-    with tarfile.open(fileobj=data, mode='w:gz') as tf:
-        for name in names:
-            info = tarfile.TarInfo(name)
-            info.size = 1
-            tf.addfile(info, io.BytesIO(b'x'))
-    return data.getvalue()
-
-
-class Download:
-    status_code = 200
-    closed = False
-    def __init__(self, body): self.body = body
-    def raise_for_status(self): pass
-    def iter_content(self, chunk_size): yield from (self.body[:10], self.body[10:])
-    def close(self): self.closed = True
-
-
-def test_archive_download(tmp_path, monkeypatch):
-    def fetch(body, workdir):
-        download = Download(body)
-        monkeypatch.setattr(app, '_gh_request', lambda *a, **k: download)
-        workdir.mkdir()
-        try:
-            return app.download_tarball('o', 'r', 'a' * 40, 'fake', 1, workdir)
-        finally:
-            assert download.closed
-    root = fetch(tarball('repo-abc/main.py'), tmp_path / 'ok')
-    assert root == tmp_path / 'ok' / 'repo-abc' and (root / 'main.py').read_text() == 'x'
-    with pytest.raises(RuntimeError, match='Empty archive'):
-        fetch(tarball(), tmp_path / 'empty')
-    clock = itertools.count(0, 61)
-    monkeypatch.setattr(app.time, 'monotonic', lambda: next(clock))
-    with pytest.raises(RuntimeError, match='deadline'):
-        fetch(tarball('repo/main.py'), tmp_path / 'slow')
-
-
 # ---------- Pipeline ----------
 
 def test_pipeline_refuses_paths_outside_the_snapshot_and_skips_non_python(tmp_path, monkeypatch):
@@ -238,7 +198,7 @@ def test_pipeline_refuses_paths_outside_the_snapshot_and_skips_non_python(tmp_pa
         (directory / 'outside.py').write_text('print(1)\n')   # exists, so only the path check can stop the scan
         changed = {str(directory / 'outside.py') if name == 'ABSOLUTE' else name: None}
         completed = []
-        monkeypatch.setattr(app, 'download_tarball', lambda *a, _root=root: _root)
+        monkeypatch.setattr(app, 'fetch_files', lambda *a, _root=root: _root)
         monkeypatch.setattr(app, 'list_changed_files', lambda *a, _changed=changed: _changed)
         monkeypatch.setattr(app, 'complete_check_run', lambda *a: completed.append(a))
         pipeline()
@@ -254,7 +214,7 @@ def test_rejected_annotations_are_dropped_not_the_result(tmp_path, monkeypatch):
     monkeypatch.setattr(app, 'complete_check_run', complete)
     monkeypatch.setattr(app, 'MODE', 'local')
     (tmp_path / 'app.py').write_text('print(1)\n')
-    monkeypatch.setattr(app, 'download_tarball', lambda *a: tmp_path)
+    monkeypatch.setattr(app, 'fetch_files', lambda *a: tmp_path)
     monkeypatch.setattr(app, 'list_changed_files', lambda *a: {'app.py': {1}})
     monkeypatch.setattr(app, 'run_semgrep', lambda **k: [finding('app.py', 1)])
     pipeline()
@@ -265,7 +225,7 @@ def test_rejected_annotations_are_dropped_not_the_result(tmp_path, monkeypatch):
 def test_completion_failure_is_raised_only_where_a_worker_can_retry(tmp_path, monkeypatch):
     monkeypatch.setattr(app, '_get_json', lambda *a, **k: {'head': {'sha': 'a' * 40}})
     (tmp_path / 'app.py').write_text('print(1)\n')
-    monkeypatch.setattr(app, 'download_tarball', lambda *a: tmp_path)
+    monkeypatch.setattr(app, 'fetch_files', lambda *a: tmp_path)
     monkeypatch.setattr(app, 'list_changed_files', lambda *a: {'app.py': {1}})
     monkeypatch.setattr(app, 'run_semgrep', lambda **k: [])
     def down(*a): raise requests.ConnectionError('down')

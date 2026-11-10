@@ -285,7 +285,8 @@ rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy
   the lines it covers. Only changed files are scanned, so a change in one file can't raise a finding in
   another that it didn't touch.
 - **Size limits fail closed:** 1 MiB per scanned file; for the GitHub App also a 1 MiB webhook body,
-  25 MiB archive, 100 MiB extracted, 10,000 archive members and 3,000 changed files.
+  3,000 changed files and 500 changed Python, JavaScript and TypeScript files per pull request. The App
+  downloads only those files, so the size of the repository doesn't matter.
 - **Local mode is not an OS sandbox.** It strips credentials from the scanner and stages only the selected
   files. Before scanning untrusted public repositories, use the durable mode's isolated worker.
 

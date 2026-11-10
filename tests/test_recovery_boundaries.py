@@ -1,7 +1,5 @@
 """Real local queue/lock recovery; GitHub and container preflight remain mocked."""
 from concurrent.futures import ThreadPoolExecutor
-import io
-import tarfile
 
 import pytest
 
@@ -10,7 +8,6 @@ import worker
 from analyzers import semgrep_runner as runner
 from job_store import JobStore
 from test_jobs import configure, payload
-from test_security import archive
 
 
 class IdleWorker(Exception):
@@ -89,17 +86,12 @@ def test_concurrent_claims_never_return_same_job(tmp_path):
     assert set(claimed) == expected
 
 
-def test_head_changes_during_download_cancels_and_cleans_staging(monkeypatch):
+def test_head_changes_before_download_cancels_without_fetching_files(monkeypatch):
     configure(monkeypatch)
     heads = iter(['a' * 40, 'b' * 40])
     monkeypatch.setattr(app, '_get_json', lambda *a, **k: {'head': {'sha': next(heads)}})
-    roots = []
-    def download(*args):
-        root = args[-1]
-        roots.append(root)
-        (root / 'main.py').write_text('print(1)')
-        return root
-    monkeypatch.setattr(app, 'download_tarball', download)
+    fetches = []
+    monkeypatch.setattr(app, 'fetch_files', lambda *a, **k: fetches.append(a))
     monkeypatch.setattr(app, 'list_changed_files', lambda *a: {'main.py': None})
     scans = []
     monkeypatch.setattr(app, 'run_semgrep', lambda **kw: scans.append(kw))
@@ -108,19 +100,4 @@ def test_head_changes_during_download_cancels_and_cleans_staging(monkeypatch):
     app.run_semgrep_pipeline('lansiquo', 'PR_Reviewer', 'lansiquo', 'PR_Reviewer', 1,
                             'a' * 40, 80788483, 'lansiquo', 'PR_Reviewer', 99, 'fake')
     assert completed[0][3] == 'cancelled'
-    assert not scans and roots and not roots[0].exists()
-
-
-def test_multiple_archive_roots_fail_closed(tmp_path):
-    with archive([('one/a.py', tarfile.REGTYPE, b'a'), ('two/b.py', tarfile.REGTYPE, b'b')]) as tf:
-        with pytest.raises(RuntimeError, match='one root'):
-            app._safe_extract_tar(tf, tmp_path)
-    assert not (tmp_path / 'two').exists()
-
-
-def test_truncated_archive_fails_before_success(tmp_path):
-    member = tarfile.TarInfo('root/main.py')
-    member.size = 100
-    with tarfile.open(fileobj=io.BytesIO(member.tobuf() + b'abc'), mode='r:') as tf:
-        with pytest.raises(tarfile.ReadError):
-            app._safe_extract_tar(tf, tmp_path)
+    assert not scans and not fetches

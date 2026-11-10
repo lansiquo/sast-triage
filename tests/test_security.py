@@ -1,11 +1,12 @@
 import hashlib
 import hmac
-import io
 import os
+import base64
 import json
 import subprocess
-import tarfile
 from pathlib import Path
+
+import requests
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,56 +43,93 @@ def test_webhook_size_limit(monkeypatch):
     assert post(b' ' * 9).status_code == 413
 
 
-def archive(entries):
-    data = io.BytesIO()
-    with tarfile.open(fileobj=data, mode='w') as tf:
-        for name, kind, content in entries:
-            member = tarfile.TarInfo(name)
-            member.type = kind
-            if kind == tarfile.REGTYPE:
-                member.size = len(content)
-            elif kind in (tarfile.SYMTYPE, tarfile.LNKTYPE):
-                member.linkname = '../../outside'
-            tf.addfile(member, io.BytesIO(content) if kind == tarfile.REGTYPE else None)
-    data.seek(0)
-    return tarfile.open(fileobj=data)
+# ---------- Changed files: fetched one by one, never from an archive ----------
+
+def contents(path, data=b'print(1)\n', **override):
+    """A contents API answer for one regular file."""
+    entry = {'type': 'file', 'path': path, 'size': len(data), 'encoding': 'base64',
+             'content': base64.encodebytes(data).decode()}
+    return {**entry, **override}
 
 
-def test_unsafe_archive_rejected(tmp_path):
-    unsafe = [[(name, kind, b'x')] for name, kind in [
-        ('../escape', tarfile.REGTYPE), ('/absolute', tarfile.REGTYPE),
-        ('root/../../sibling/file', tarfile.REGTYPE), ('root/link', tarfile.SYMTYPE),
-        ('root/hardlink', tarfile.LNKTYPE), ('root/fifo', tarfile.FIFOTYPE),
-        ('root/../sibling/file', tarfile.REGTYPE), ('root\\file', tarfile.REGTYPE)]]
-    unsafe.append([('root/a', tarfile.REGTYPE, b'a')] * 2)   # duplicate path
-    for index, entries in enumerate(unsafe):
-        destination = tmp_path / f'case{index}'
-        destination.mkdir()
-        with archive(entries) as tf, pytest.raises(RuntimeError):
-            app._safe_extract_tar(tf, destination)
-            pytest.fail(f'accepted {entries!r}')
+def answer(status, body=None, text=None):
+    r = requests.Response()
+    r.status_code, r.url = status, 'mock'
+    r._content = text.encode() if text is not None else json.dumps(body).encode()
+    return r
 
 
-def test_archive_normal_file(tmp_path):
-    with archive([('root/main.py', tarfile.REGTYPE, b'print(1)')]) as tf:
-        assert app._safe_extract_tar(tf, tmp_path) == 'root'
-    assert (tmp_path / 'root/main.py').read_bytes() == b'print(1)'
+def fake_github(monkeypatch, answers):
+    """Serve {path: Response} for contents requests; record (url, ref)."""
+    calls = []
+    def request(method, url, token, install_id=None, params=None, **k):
+        calls.append((url.removeprefix(app.GITHUB_API), params['ref']))
+        return answers[url.rsplit('/contents/', 1)[1]]
+    monkeypatch.setattr(app, '_gh_request', request)
+    return calls
 
 
-def test_archive_limits(tmp_path, monkeypatch):
-    for limit, value in [('MAX_EXTRACTED_BYTES', 1), ('MAX_ARCHIVE_MEMBERS', 0)]:
-        destination = tmp_path / limit
-        destination.mkdir()
-        with monkeypatch.context() as m:
-            m.setattr(app, limit, value)
-            with archive([('root/main.py', tarfile.REGTYPE, b'xx')]) as tf, pytest.raises(RuntimeError):
-                app._safe_extract_tar(tf, destination)
-                pytest.fail(f'{limit} not enforced')
+def test_only_the_requested_files_are_fetched_at_the_commit(tmp_path, monkeypatch):
+    calls = fake_github(monkeypatch, {'src/a%20b.py': answer(200, contents('src/a b.py', b'x = 1\n')),
+                                      'web/app.js': answer(200, contents('web/app.js', b'' ))})
+    root = app.fetch_files('o', 'r', 'a' * 40, ['src/a b.py', 'web/app.js'], 'fake', 1, tmp_path)
+    assert calls == [('/repos/o/r/contents/src/a%20b.py', 'a' * 40), ('/repos/o/r/contents/web/app.js', 'a' * 40)]
+    assert root.parent == tmp_path and (root / 'src/a b.py').read_bytes() == b'x = 1\n'
+    assert (root / 'web/app.js').read_bytes() == b''
+    assert sorted(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()) == ['src/a b.py', 'web/app.js']
+
+
+def test_unsafe_paths_are_refused_before_any_request(tmp_path, monkeypatch):
+    calls = fake_github(monkeypatch, {})
+    for path in ['../escape.py', 'src/../../escape.py', '/etc/app.py', 'src\\app.py', '']:
+        with pytest.raises(RuntimeError, match='Unsafe'):
+            app.fetch_files('o', 'r', 'a' * 40, [path], 'fake', 1, tmp_path)
+    assert calls == []
+
+
+@pytest.mark.parametrize('body', [
+    contents('app.py', type='symlink'),                          # a link: its target is not this file
+    contents('elsewhere.py'),                                    # GitHub followed a link to another path
+    contents('app.py', type='submodule'),
+    [contents('app.py/inner.py')],                               # a directory listing
+    contents('app.py', size=app.MAX_SOURCE_BYTES + 1, encoding='none', content=''),   # over 1 MiB
+    contents('app.py', size=5),                                  # size disagrees with the content
+    contents('app.py', content='not base64!'),
+    contents('app.py', encoding='utf-8'),
+])
+def test_anything_but_a_small_regular_file_fails_closed(tmp_path, monkeypatch, body):
+    fake_github(monkeypatch, {'app.py': answer(200, body)})
+    with pytest.raises(RuntimeError, match='not a regular file'):
+        app.fetch_files('o', 'r', 'a' * 40, ['app.py'], 'fake', 1, tmp_path)
+    # For the base versions it is left out instead, so the file's findings count as new.
+    root = app.fetch_files('o', 'r', 'a' * 40, ['app.py'], 'fake', 1, tmp_path, lenient=True)
+    assert not (root / 'app.py').exists()
+
+
+def test_missing_files_and_api_errors(tmp_path, monkeypatch):
+    fake_github(monkeypatch, {'gone.py': answer(404, {'message': 'Not Found'}), 'down.py': answer(502, {}),
+                              'html.py': answer(200, text='<html>')})
+    with pytest.raises(requests.HTTPError):
+        app.fetch_files('o', 'r', 'a' * 40, ['gone.py'], 'fake', 1, tmp_path)   # a head file must exist
+    assert not (app.fetch_files('o', 'r', 'a' * 40, ['gone.py'], 'fake', 1, tmp_path, lenient=True) / 'gone.py').exists()
+    for lenient in (False, True):
+        with pytest.raises(requests.HTTPError):
+            app.fetch_files('o', 'r', 'a' * 40, ['down.py'], 'fake', 1, tmp_path, lenient=lenient)
+    with pytest.raises(RuntimeError, match='not a regular file'):
+        app.fetch_files('o', 'r', 'a' * 40, ['html.py'], 'fake', 1, tmp_path)
+
+
+def test_too_many_changed_source_files_fail_closed(tmp_path, monkeypatch):
+    calls = fake_github(monkeypatch, {})
+    monkeypatch.setattr(app, 'MAX_FETCHED_FILES', 2)
+    with pytest.raises(RuntimeError, match='Too many'):
+        app.fetch_files('o', 'r', 'a' * 40, ['a.py', 'b.py', 'c.py'], 'fake', 1, tmp_path)
+    assert calls == []
 
 
 def test_pipeline_failure_is_not_success(monkeypatch, tmp_path):
     (tmp_path / 'main.py').write_text('print(1)')
-    monkeypatch.setattr(app, 'download_tarball', lambda *args: tmp_path)
+    monkeypatch.setattr(app, 'fetch_files', lambda *args: tmp_path)
     monkeypatch.setattr(app, 'list_changed_files', lambda *args: {'main.py': None})
     def fail(**kwargs):
         raise RuntimeError('scan failed')
@@ -136,21 +174,6 @@ def test_invalid_pr_identifiers():
         side = {'sha': sha, 'repo': {'owner': {'login': owner}, 'name': 'repo'}}
         payload = {'action': 'opened', 'number': 1, 'pull_request': {'head': side, 'base': side}}
         assert post(json.dumps(payload).encode(), event='pull_request').status_code == 400, (owner, sha)
-
-
-def test_download_limit_closes_response(tmp_path, monkeypatch):
-    class Response:
-        status_code = 200
-        closed = False
-        def raise_for_status(self): pass
-        def iter_content(self, chunk_size): yield b'x' * 11
-        def close(self): self.closed = True
-    response = Response()
-    monkeypatch.setattr(app, 'MAX_ARCHIVE_BYTES', 10)
-    monkeypatch.setattr(app, '_gh_request', lambda *a, **k: response)
-    with pytest.raises(RuntimeError, match='size limit'):
-        app.download_tarball('o', 'r', 'a' * 40, 'fake', 1, tmp_path)
-    assert response.closed
 
 
 def test_annotations_batched(monkeypatch):

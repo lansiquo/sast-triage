@@ -5,7 +5,7 @@ sast-triage runs from the command line and as a GitHub Action. The GitHub App se
 ## Trust boundaries
 
 - **Webhook sender:** every event needs a valid HMAC-SHA256 signature over the exact body (constant-time, rotation supported). No secret, no processing.
-- **PR author:** repository content is untrusted and never executed. Unsafe archives (traversal, links, special files, duplicates, multiple roots) are rejected, and size limits fail closed.
+- **PR author:** repository content is untrusted and never executed. Only the changed source files are downloaded, one by one: no archive is unpacked. Unsafe paths, symbolic links, submodules and files over 1 MiB are rejected, and size limits fail closed.
 - **Scanner:** only changed Python, JavaScript and TypeScript files are staged; PR rules, ignore files, Git metadata and credentials are excluded, and `nosemgrep` is ignored. Semgrep runs with metrics off and accepts one local, service-owned rule file outside the scanned tree; registry IDs, `auto` and URLs are refused, so it never downloads rules. Scanner errors cannot pass a check.
 - **Command line and GitHub Action:** the scanned checkout is untrusted and never executed. Its Semgrep rules, ignore files and git configuration can't change the scan: external diff and text-conversion helpers and fsmonitor are turned off, symbolic links are not followed, and a `--base` that looks like an option is refused. The Action passes its inputs through environment variables, installs only `requirements-cli.txt` and uses no token.
 - **GitHub:** API credentials stay in the parent process; TLS verification stays on. Tests and command-line scans make no GitHub calls.

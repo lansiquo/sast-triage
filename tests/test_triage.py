@@ -155,7 +155,7 @@ def test_pipeline_scans_changed_javascript_and_typescript_files(tmp_path, monkey
     for name in ('app.js', 'src/view.tsx', 'api.py', 'README.md', 'styles.css'):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text('x\n')
-    monkeypatch.setattr(app, 'download_tarball', lambda *a: tmp_path)
+    monkeypatch.setattr(app, 'fetch_files', lambda *a: tmp_path)
     monkeypatch.setattr(app, 'list_changed_files', lambda *a: dict.fromkeys(
         ['app.js', 'src/view.tsx', 'api.py', 'README.md', 'styles.css']))
     scanned = []
@@ -170,7 +170,7 @@ def test_pipeline_scans_changed_javascript_and_typescript_files(tmp_path, monkey
 def test_pipeline_without_supported_files_is_neutral_and_missing_sources_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(app, 'MODE', 'local')
     monkeypatch.setattr(app, 'run_semgrep', lambda **k: pytest.fail('must not scan'))
-    monkeypatch.setattr(app, 'download_tarball', lambda *a: tmp_path)
+    monkeypatch.setattr(app, 'fetch_files', lambda *a: tmp_path)
     (tmp_path / 'README.md').write_text('x\n')
     for changed, conclusion, summary in [
         (['README.md', 'package.json'], 'neutral', 'No supported changed Python, JavaScript or TypeScript files'),
@@ -267,7 +267,7 @@ def run_pipeline(tmp_path, monkeypatch, findings, changed):
     (tmp_path / 'tests').mkdir()
     for name in ('app.py', 'tests/test_app.py'):
         (tmp_path / name).write_text('print(1)\n')
-    monkeypatch.setattr(app, 'download_tarball', lambda *a: tmp_path)
+    monkeypatch.setattr(app, 'fetch_files', lambda *a: tmp_path)
     monkeypatch.setattr(app, 'list_changed_files', lambda *a: changed)
     monkeypatch.setattr(app, 'run_semgrep', lambda **k: findings)
     completed = []
@@ -357,7 +357,7 @@ def run_pipeline_with_base(tmp_path, monkeypatch, head_text, base_text, scan, ch
         root.mkdir(parents=True)
         (root / 'app.py').write_text(text)
     downloads = []
-    monkeypatch.setattr(app, 'download_tarball', lambda o, r, sha, *a: downloads.append(sha) or (head if sha == 'a' * 40 else base))
+    monkeypatch.setattr(app, 'fetch_files', lambda o, r, sha, paths, *a, **k: downloads.append((sha, paths, k)) or (head if sha == 'a' * 40 else base))
     monkeypatch.setattr(app, 'list_changed_files', lambda *a: changed)
     monkeypatch.setattr(app, '_get_json', compare or (lambda url, *a, **k: {'merge_base_commit': {'sha': 'c' * 40}}))
     monkeypatch.setattr(app, 'run_semgrep', lambda **k: scan(Path(k['repo_root'])))
@@ -375,7 +375,7 @@ def test_pipeline_fails_when_a_change_elsewhere_introduces_a_finding_on_an_untou
         tmp_path, monkeypatch, 'cmd = "ls " + request.args["dir"]\nos.system(cmd)\n', 'cmd = "ls"\nos.system(cmd)\n',
         scan, {'app.py': {1}})
     assert conclusion == 'failure' and title == '1 new P1 finding'
-    assert downloads == ['a' * 40, 'c' * 40]                      # the head, then the merge base
+    assert downloads == [('a' * 40, ['app.py'], {}), ('c' * 40, ['app.py'], {'lenient': True})]   # head, then merge base
     assert annotations[0]['annotation_level'] == 'failure'
     assert 'these lines are unchanged, but the finding was not there before' in annotations[0]['raw_details']
 
@@ -403,7 +403,7 @@ def test_pipeline_counts_everything_as_new_when_the_base_cannot_be_scanned_and_f
         (conclusion, _, summary, _), downloads = run_pipeline_with_base(
             tmp_path / str(attempt), monkeypatch, 'x = 1\nos.system(cmd)\n', 'x = 1\nos.system(cmd)\n',
             lambda root: [finding('app.py', 2)], {'app.py': {1}}, compare=lambda *a, _r=reply, **k: _r)
-        assert conclusion == 'failure' and summary.startswith('Scan incomplete') and downloads == ['a' * 40]
+        assert conclusion == 'failure' and summary.startswith('Scan incomplete') and [d[0] for d in downloads] == ['a' * 40]
 
 
 def test_changed_file_list_records_where_each_file_was_before(monkeypatch):

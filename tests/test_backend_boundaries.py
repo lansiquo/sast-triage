@@ -64,7 +64,7 @@ def test_pipeline_rate_limit_does_not_attempt_completion(monkeypatch):
 
 def test_close_or_new_commit_during_scan_cancels_result(tmp_path, monkeypatch):
     configure(monkeypatch);(tmp_path/'main.py').write_text('print(1)')
-    monkeypatch.setattr(app,'download_tarball',lambda *a:tmp_path)
+    monkeypatch.setattr(app,'fetch_files',lambda *a:tmp_path)
     monkeypatch.setattr(app,'list_changed_files',lambda *a:{'main.py':None})
     for last in [{'state':'closed','head':{'sha':'a'*40}}, {'state':'open','head':{'sha':'b'*40}}]:
         states=iter([{'head':{'sha':'a'*40}}]*2+[last])
@@ -79,7 +79,7 @@ def test_close_or_new_commit_during_scan_cancels_result(tmp_path, monkeypatch):
 
 def test_missing_changed_python_file_is_failure(tmp_path,monkeypatch):
     monkeypatch.setattr(app,'MODE','local')
-    monkeypatch.setattr(app,'download_tarball',lambda *a:tmp_path)
+    monkeypatch.setattr(app,'fetch_files',lambda *a:tmp_path)
     monkeypatch.setattr(app,'list_changed_files',lambda *a:{'missing.py':None})
     monkeypatch.setattr(app,'run_semgrep',lambda **k:pytest.fail('Must not scan incomplete snapshot'))
     completed=[];monkeypatch.setattr(app,'complete_check_run',lambda *a:completed.append(a))

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Authenticated GitHub PR webhooks with bounded, trusted-rule Semgrep scans."""
 
-import io
+import base64
 import math
 from email.utils import parsedate_to_datetime
 import re
@@ -13,12 +13,12 @@ import logging
 import os
 import time
 import hmac
-import tarfile
 import hashlib
 import tempfile
 from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import quote
 
 import certifi
 import requests
@@ -60,10 +60,8 @@ WEBHOOK_SECRET = (os.getenv("GITHUB_WEBHOOK_SECRET") or "").strip()
 SECRETS = [s.strip() for s in (os.getenv("GITHUB_WEBHOOK_SECRETS") or WEBHOOK_SECRET).split(",") if s.strip()]
 # Authentication cannot be disabled by a stale development environment.
 MAX_WEBHOOK_BYTES = 1024 * 1024
-MAX_ARCHIVE_BYTES = 25 * 1024 * 1024
 MAX_SOURCE_BYTES = 1024 * 1024   # the scanner's per-file limit
-MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
-MAX_ARCHIVE_MEMBERS = 10000
+MAX_FETCHED_FILES = 500          # changed source files read per version of a pull request
 SCAN_SLOTS = threading.BoundedSemaphore(2)
 MODE = os.getenv("PRSEC_MODE", "local")
 ALLOWED_REPOSITORY = os.getenv("PRSEC_ALLOWED_REPOSITORY", "")
@@ -228,45 +226,6 @@ def _get_installation_token(installation_id: int) -> str:
         return EXPLICIT_INSTALLATION_TOKEN
     raise RuntimeError("No installation token available")
 
-# ---------- Safe tar extraction (member-by-member) ----------
-def _safe_extract_tar(tf: tarfile.TarFile, dest_dir: Path) -> str:
-    base = dest_dir.resolve()
-    total = 0
-    root_name = None
-    seen = set()
-    for index, member in enumerate(tf):
-        if index >= MAX_ARCHIVE_MEMBERS:
-            raise RuntimeError("Archive has too many members")
-        name = PurePosixPath(member.name)
-        if (name.is_absolute() or ".." in name.parts or not name.parts
-                or "\\" in member.name or not (member.isdir() or member.isreg())):
-            raise RuntimeError("Unsafe archive member")
-        if root_name is None:
-            root_name = name.parts[0]
-        if name.parts[0] != root_name or (len(name.parts) == 1 and not member.isdir()):
-            raise RuntimeError("Archive must have one root directory")
-        target = base.joinpath(*name.parts)
-        if not target.resolve().is_relative_to(base) or target in seen:
-            raise RuntimeError("Unsafe or duplicate archive path")
-        seen.add(target)
-        total += member.size
-        if member.size < 0 or total > MAX_EXTRACTED_BYTES:
-            raise RuntimeError("Archive exceeds extraction size limit")
-        if member.isdir():
-            target.mkdir(parents=True, exist_ok=True)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            source = tf.extractfile(member)
-            if source is None:
-                raise RuntimeError("Unreadable archive member")
-            with source, target.open("xb") as output:
-                shutil.copyfileobj(source, output)
-    if not root_name:
-        raise RuntimeError("Empty archive")
-    return root_name
-
-
-# ---------- GitHub Checks helpers ----------
 def _create_check_in_progress(owner: str, repo: str, head_sha: str, name: str, title: str, summary: str, token: str, install_id: Optional[int]) -> int:
     data = {"name": name, "head_sha": head_sha, "status": "in_progress", "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "output": {"title": title, "summary": summary}}
     resp = _post_json(f"{GITHUB_API}/repos/{owner}/{repo}/check-runs", token, data, install_id=install_id)
@@ -329,34 +288,59 @@ def list_changed_files(owner: str, repo: str, pr: int, token: str, install_id: O
         raise RuntimeError("PR file list exceeded supported pagination limit")
     return files
 
-def download_tarball(owner: str, repo: str, sha: str, token: str, install_id: Optional[int], workdir: Path) -> Path:
-    url = f"{GITHUB_API}/repos/{owner}/{repo}/tarball/{sha}"
-    r = _gh_request("GET", url, token, install_id=install_id, stream=True)
-    if r.status_code >= 400:
-        log.error("GitHub GET failed status=%s", r.status_code)
-    r.raise_for_status()
-    tar_bytes = io.BytesIO()
-    started = time.monotonic()
+def fetch_files(owner: str, repo: str, ref: str, paths: List[str], token: str, install_id: Optional[int],
+                workdir: Path, lenient: bool = False) -> Path:
+    """Write `paths` as they are at commit `ref` under a new folder in `workdir`, and return the folder.
+
+    Only these files are downloaded, one contents API call each: no repository archive
+    is fetched or unpacked. A path must be relative and stay inside the folder, and
+    GitHub must answer with a regular file at that exact path, of at most 1 MiB.
+    Anything else (a symbolic link, a submodule, a larger file, a malformed answer)
+    fails the scan. With `lenient` (the base versions), such a file is left out
+    instead, and so is one that does not exist at `ref`; HTTP errors still raise.
+    """
+    if len(paths) > MAX_FETCHED_FILES:
+        raise RuntimeError("Too many changed source files to fetch")
+    root = Path(tempfile.mkdtemp(prefix="files_", dir=workdir))
+    resolved = root.resolve()
+    for path in paths:
+        parts = PurePosixPath(path).parts
+        target = root.joinpath(*parts)
+        if (not parts or PurePosixPath(path).is_absolute() or ".." in parts or "\\" in path
+                or not target.resolve().is_relative_to(resolved)):
+            raise RuntimeError("Unsafe changed-file path")
+        r = _gh_request("GET", f"{GITHUB_API}/repos/{owner}/{repo}/contents/{quote(path, safe='/')}", token,
+                        install_id=install_id, params={"ref": ref})
+        if r.status_code == 404 and lenient:
+            continue
+        if r.status_code >= 400:
+            log.error("GitHub GET failed status=%s", r.status_code)
+        r.raise_for_status()
+        data = _file_contents(r, path)
+        if data is None:
+            if lenient:
+                continue
+            raise RuntimeError("Changed source file is not a regular file of at most 1 MiB at the commit")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    return root
+
+
+def _file_contents(r: requests.Response, path: str) -> Optional[bytes]:
+    """The bytes of a contents API answer for one regular file, or None if it is anything else."""
     try:
-        for chunk in r.iter_content(chunk_size=65536):
-            if time.monotonic() - started > 60:
-                raise RuntimeError("Archive download deadline exceeded")
-            if tar_bytes.tell() + len(chunk) > MAX_ARCHIVE_BYTES:
-                raise RuntimeError("Archive download exceeds size limit")
-            tar_bytes.write(chunk)
-    finally:
-        r.close()
-    tar_bytes.seek(0)
-    with tarfile.open(fileobj=tar_bytes, mode="r:gz") as tf:
-        root_name = _safe_extract_tar(tf, workdir)
-    repo_root = workdir / (root_name or "")
-    if not repo_root.exists():
-        # fallback: choose the first extracted dir
-        subs = [p for p in workdir.iterdir() if p.is_dir()]
-        if not subs:
-            raise RuntimeError("Failed to locate repo root in tarball")
-        repo_root = subs[0]
-    return repo_root
+        entry = r.json()
+    except ValueError:
+        return None
+    if (not isinstance(entry, dict) or entry.get("type") != "file" or entry.get("path") != path
+            or not isinstance(entry.get("size"), int) or not 0 <= entry["size"] <= MAX_SOURCE_BYTES
+            or entry.get("encoding") != "base64" or not isinstance(entry.get("content"), str)):
+        return None
+    try:
+        data = base64.b64decode(entry["content"].replace("\n", ""), validate=True)
+    except ValueError:
+        return None
+    return data if len(data) == entry["size"] else None
 
 def merge_base_sha(owner: str, repo: str, base_sha: str, head_sha: str, token: str, install_id: Optional[int]) -> str:
     """The commit GitHub diffs a pull request against: the merge base of its base and head."""
@@ -374,29 +358,25 @@ def base_version_findings(owner: str, repo: str, base_sha: str, head_sha: str, c
                           config: str, exclude: List[str]) -> Optional[Dict[str, Counter]]:
     """Scan the base version of each changed source file and count its findings, keyed by the head path.
 
-    The base version is the file at the pull request's merge base, from a second
-    snapshot with the same archive limits. A file that is missing there, too large
-    or not a regular file is left out, so its findings count as new. Returns None
-    when the scanner cannot scan the base versions; download and API errors raise.
+    The base version is the file at the pull request's merge base, fetched like the
+    head files. A file that is missing there, larger than 1 MiB or not a regular file
+    is left out, so its findings count as new. A file the pull request added has no
+    base version. Returns None when the scanner cannot scan the base versions; API
+    errors raise.
     """
     previous = getattr(changed, 'previous', None)
     if previous is None:
         previous = {path: path for path in changed}
-    base_dir = workdir / 'base'
-    base_dir.mkdir()
-    base_root = download_tarball(owner, repo, merge_base_sha(owner, repo, base_sha, head_sha, token, install_id),
-                                 token, install_id, base_dir)
-    resolved_root = base_root.resolve()
-    staged: Dict[str, List[str]] = {}   # base path -> the head paths that came from it
+    wanted: Dict[str, List[str]] = {}   # base path -> the head paths that came from it
     for path in sources:
         old = previous.get(path)
-        if not isinstance(old, str) or not is_source_path(old) or Path(old).is_absolute():
-            continue
-        candidate = base_root / old
-        if (not candidate.resolve().is_relative_to(resolved_root) or candidate.is_symlink()
-                or not candidate.is_file() or candidate.stat().st_size > MAX_SOURCE_BYTES):
-            continue
-        staged.setdefault(old, []).append(path)
+        if isinstance(old, str) and is_source_path(old):
+            wanted.setdefault(old, []).append(path)
+    if not wanted:
+        return {}
+    base_root = fetch_files(owner, repo, merge_base_sha(owner, repo, base_sha, head_sha, token, install_id),
+                            sorted(wanted), token, install_id, workdir, lenient=True)
+    staged = {old: paths for old, paths in wanted.items() if (base_root / old).is_file()}
     baseline: Dict[str, Counter] = {}
     if staged:
         try:
@@ -467,13 +447,7 @@ def run_semgrep_pipeline(
                     conclusion = "cancelled"
                     summary = "PR closed or superseded by a newer commit; this job was not scanned."
                     return
-            # 1) Download repo snapshot at PR HEAD. GitHub keeps every PR head
-            # commit in the base repository (refs/pull/N/head), so fork PRs are
-            # read with the base-scoped installation token too.
-            repo_root = download_tarball(base_owner, base_repo, head_sha, token, installation_id, tdp)
-
-            # Scan the immutable snapshot with service-owned rules only.
-            # Repository rules/ignore files are untrusted and never configure this scan.
+            # 1) The changed files and their diffs.
             changed = list_changed_files(base_owner, base_repo, pr, token, installation_id)
             if MODE == "durable":
                 current = _get_json(f"{GITHUB_API}/repos/{base_owner}/{base_repo}/pulls/{pr}",
@@ -486,17 +460,21 @@ def run_semgrep_pipeline(
                 if isinstance(sha, str) and re.fullmatch(r'[0-9a-f]{40}', sha):
                     current_base_sha = sha
             for name in changed:
-                candidate = repo_root / name
-                if Path(name).is_absolute() or not candidate.resolve().is_relative_to(repo_root.resolve()):
+                parts = PurePosixPath(name).parts
+                if not parts or PurePosixPath(name).is_absolute() or ".." in parts or "\\" in name:
                     raise RuntimeError("Unsafe changed-file path")
             existing = [p for p in changed if is_source_path(p)]
-            if any(not (repo_root / p).is_file() for p in existing):
-                raise RuntimeError('Changed source file is missing from the commit snapshot')
             if not existing:
                 conclusion = "neutral"
                 summary = ("No supported changed Python, JavaScript or TypeScript files to scan "
                            "(deleted files are excluded).")
                 return
+            # 2) Only those files, at the exact PR head commit. GitHub keeps every PR head commit
+            # in the base repository (refs/pull/N/head), so fork PRs are read with the
+            # base-scoped installation token too. Their rules and ignore files are never used.
+            repo_root = fetch_files(base_owner, base_repo, head_sha, existing, token, installation_id, tdp)
+            if any(not (repo_root / p).is_file() for p in existing):
+                raise RuntimeError('Changed source file is missing from the fetched files')
             offline_yaml = tdp / "trusted-rules.yaml"
             offline_yaml.write_text(OFFLINE_RULESET)
             cfg_value = str(offline_yaml)

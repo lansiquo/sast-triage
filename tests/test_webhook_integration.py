@@ -79,19 +79,19 @@ def test_pull_request_flow_integration(monkeypatch, tmp_path):
             return _Resp(200, {"status": "in_progress", "conclusion": None})
         if method == "PATCH" and "/check-runs/" in url:
             return _Resp(200, {"ok": True})
-        # Tarball fetch isn't used because we stub download_tarball below
+        # File contents aren't fetched because we stub fetch_files below
         return _Resp(200, {"ok": True})
 
     monkeypatch.setattr(appmod, "_gh_request", _fake_gh_request)
 
-    # Provide a local "repo" directory instead of downloading a tarball
-    def _fake_download_tarball(_o, _r, _sha, _tok, _inst, workdir: Path) -> Path:
+    # Provide a local "repo" directory instead of fetching the changed files
+    def _fake_fetch_files(_o, _r, _sha, _paths, _tok, _inst, workdir: Path, lenient=False) -> Path:
         root = workdir / "repo"
         root.mkdir(parents=True, exist_ok=True)
         (root / "bad.py").write_text("print('hi')\n")
         return root
 
-    monkeypatch.setattr(appmod, "download_tarball", _fake_download_tarball)
+    monkeypatch.setattr(appmod, "fetch_files", _fake_fetch_files)
 
     # Make Semgrep runner a no-op (we’re not asserting on findings here)
     monkeypatch.setattr(
