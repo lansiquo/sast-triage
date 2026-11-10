@@ -65,6 +65,6 @@ Prerequisites: an approved Linux test host with an already configured rootless D
 
 Sources: [official PyPI release metadata](https://pypi.org/pypi/semgrep/1.182.1/json), [Semgrep CLI reference](https://docs.semgrep.dev/cli-reference), and the individual upstream advisories linked above.
 
-## Semgrep retained — latest checkpoint
+## Semgrep retained (latest checkpoint)
 
 The user selected Semgrep; alternative-scanner evaluation is deferred. Official PyPI metadata was rechecked: 1.182.1 remains latest and still pins MCP 1.29.0 and OpenTelemetry API ~=1.37.0. Fresh isolated-environment audits again found five scanner advisories in those two packages and no known service-environment vulnerabilities. No incompatible overrides or vulnerability waivers were applied. The trusted-fixture local GUI works with the existing Semgrep default; this does not clear production deployment.

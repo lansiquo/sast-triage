@@ -17,7 +17,7 @@ rules:
       refs: ["https://semgrep.dev"]
 
   ###########################################################################
-  # PYTHON — Code Injection, Unsafe APIs, Crypto, SSRF-like patterns
+  # PYTHON: Code Injection, Unsafe APIs, Crypto, SSRF-like patterns
   ###########################################################################
   - id: py.eval.exec
     message: "Use of eval/exec is dangerous; prefer safe evaluators or whitelists."
@@ -96,7 +96,7 @@ rules:
       cwe: ["CWE-489"]
 
   ###########################################################################
-  # JAVASCRIPT / TYPESCRIPT — XSS, Dangerous APIs, Command Exec, TLS bypass
+  # JAVASCRIPT / TYPESCRIPT: XSS, Dangerous APIs, Command Exec, TLS bypass
   ###########################################################################
   - id: js.eval.new-function
     message: "Avoid eval/new Function; prefer safe parsers or whitelisted behavior."
@@ -157,7 +157,7 @@ rules:
       cwe: ["CWE-79"]
 
   ###########################################################################
-  # DOCKERFILE — Pinning, root user, curl|bash
+  # DOCKERFILE: Pinning, root user, curl|bash
   ###########################################################################
   - id: docker.latest.tag
     message: "Avoid ':latest' tag; pin to a specific digest or version."
@@ -188,7 +188,7 @@ rules:
       cwe: ["CWE-494"]
 
   ###########################################################################
-  # TERRAFORM (HCL) — Common misconfigs (S3 public, SG open)
+  # TERRAFORM (HCL): Common misconfigs (S3 public, SG open)
   ###########################################################################
   - id: tf.aws.s3.public-acl
     message: "S3 bucket publicly accessible; block public ACLs/policies."
@@ -220,7 +220,7 @@ rules:
       cwe: ["CWE-284"]
 
   ###########################################################################
-  # GITHUB ACTIONS — Unsafe triggers, unpinned actions
+  # GITHUB ACTIONS: Unsafe triggers, unpinned actions
   ###########################################################################
   - id: gha.pull_request_target
     message: "pull_request_target runs with elevated perms; only use with strict safeguards."
@@ -248,7 +248,7 @@ rules:
       cwe: ["CWE-494"]
 
   ###########################################################################
-  # PHP — Dangerous sinks (kept tight to reduce noise)
+  # PHP: Dangerous sinks (kept tight to reduce noise)
   ###########################################################################
   - id: php.eval.exec.system
     message: "Dangerous execution function; validate inputs or remove."
@@ -276,7 +276,7 @@ rules:
       cwe: ["CWE-98"]
 
   ###########################################################################
-  # GO — Command exec, weak crypto, TLS off
+  # GO: Command exec, weak crypto, TLS off
   ###########################################################################
   - id: go.exec.command
     message: "exec.Command with variable command/args can be injection-prone."
@@ -308,6 +308,6 @@ rules:
       cwe: ["CWE-295"]
 
   ###########################################################################
-  # QUALITY-OF-LIFE: Generic secrets (kept off—handled by p/secrets)
+  # QUALITY-OF-LIFE: Generic secrets (kept off; p/secrets handles them)
   # QUALITY-OF-LIFE: Generic SQL concat rules (omitted to avoid PR spam)
   ###########################################################################

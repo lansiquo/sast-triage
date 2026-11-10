@@ -1,4 +1,4 @@
-# Deployment guide — not deployed
+# Deployment guide (not deployed)
 
 Operator guide for durable mode. No host or credentials are provisioned.
 

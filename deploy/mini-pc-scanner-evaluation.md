@@ -64,7 +64,7 @@ For the existing Semgrep comparison, use `PRSEC_SCANNER_COMMAND=semgrep` and `SE
 - Approval before transferring the existing App PEM or webhook secret to the VM. Reuse App ID 1776205 and installation 80788483. Runtime tokens request only Contents read, Pull requests read and Checks write for `lansiquo/sast-triage`. No permission expansion is needed; the App credential itself retains its existing broader authority.
 - An independently approved ingress/TLS plan before changing the Smee webhook. No tunnel, firewall, routing or DNS changes are part of this preparation.
 
-## Actual rootless boundary test — prepared, not run
+## Actual rootless boundary test (prepared, not run)
 
 After provisioning is approved and the image is audited, set `PRSEC_SCANNER_IMAGE` to its immutable digest and configure the worker's existing rootless `DOCKER_HOST`. The final test image must contain `/bin/sh`, `id`, `grep`, `ls`, and `touch` for the probe; missing tools are a failed/unrun test, not a pass.
 
