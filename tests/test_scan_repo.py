@@ -323,3 +323,18 @@ def test_base_counts_every_finding_as_new_when_the_base_versions_cannot_be_scann
     captured = capsys.readouterr()
     assert 'could not be scanned, so every finding counts as new' in captured.err
     assert all(f['new'] for f in json.loads(captured.out)['findings']) and len(calls) == 2
+
+
+def test_base_scans_once_when_every_finding_is_on_a_changed_line(tmp_path, monkeypatch, capsys):
+    root = repository(tmp_path)
+    git(root, 'switch', '-q', 'main')
+    git(root, 'switch', '-q', '-c', 'new-file')
+    project(root, {'web/upload.js': 'const total = eval(req.body.total);'})       # a new file: every line added
+    git(root, 'add', '.')
+    git(root, 'commit', '-q', '-m', 'upload')
+    real, roots = scan_repo.run_semgrep, []
+    monkeypatch.setattr(scan_repo, 'run_semgrep', lambda paths, repo_root, **o: roots.append(repo_root) or real(paths, repo_root, **o))
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1
+    assert [(f['path'], f['new_because']) for f in json.loads(capsys.readouterr().out)['findings']] == [
+        ('web/upload.js', 'changed lines')]
+    assert len(roots) == 1                                        # no base version was scanned

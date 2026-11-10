@@ -35,6 +35,7 @@ class FakeGitHub:
 
     def __init__(self, contents_status=200):
         self.contents_status = contents_status
+        self.patch = '@@ -1 +1 @@\n-x\n+print(1)'   # the pull request changed line 1
         self.calls = []
 
     def __call__(self, method, url, **kwargs):
@@ -49,7 +50,7 @@ class FakeGitHub:
             return response(200, {'type': 'file', 'path': 'main.py', 'size': len(data), 'encoding': 'base64',
                                   'content': base64.b64encode(data).decode()})
         if method == 'GET' and path == f'/repos/{BASE}/pulls/1/files':
-            return response(200, [{'filename': 'main.py', 'status': 'modified', 'patch': '@@ -1 +1 @@\n-x\n+print(1)'}])
+            return response(200, [{'filename': 'main.py', 'status': 'modified', 'patch': self.patch}])
         if method == 'GET' and path == f'/repos/{BASE}/compare/{BASE_SHA}...{HEAD}':
             return response(200, {'merge_base_commit': {'sha': MERGE_BASE}})
         if method == 'PATCH' and path == f'/repos/{BASE}/check-runs/99':
@@ -124,16 +125,27 @@ def test_fork_pr_files_are_read_from_the_base_repository(github, monkeypatch):
     assert outcome == {'conclusion': 'success', 'scan_error': None}
 
 
-def test_base_versions_are_read_at_the_merge_base(github, monkeypatch):
-    # A finding in the head: the same file is then fetched and scanned as it was at the merge base.
-    finding = {'path': 'main.py', 'start_line': 1, 'end_line': 1, 'severity': 'HIGH', 'rule_id': 'py-rule',
-               'title': 'Risk', 'message': 'Risk', 'fix': None, 'cwe': None, 'owasp': None}
+FINDING = {'path': 'main.py', 'start_line': 1, 'end_line': 1, 'severity': 'HIGH', 'rule_id': 'py-rule',
+           'title': 'Risk', 'message': 'Risk', 'fix': None, 'cwe': None, 'owasp': None}
+
+
+def test_a_finding_on_a_changed_line_needs_no_base_version(github, monkeypatch):
     roots = []
-    monkeypatch.setattr(app, 'run_semgrep', lambda **k: roots.append(k['repo_root']) or [dict(finding)])
+    monkeypatch.setattr(app, 'run_semgrep', lambda **k: roots.append(k['repo_root']) or [dict(FINDING)])
+    outcome = scan_fork_pr()
+    assert github.contents_requests() == [(f'/repos/{BASE}/contents/main.py', {'ref': HEAD})]
+    assert not [p for m, p, params in github.calls if '/compare/' in p] and len(roots) == 1   # one scan
+    assert outcome == {'conclusion': 'failure', 'scan_error': None}                           # new P1
+
+
+def test_a_finding_on_an_untouched_line_is_checked_against_the_merge_base(github, monkeypatch):
+    github.patch = '@@ -1,0 +2 @@\n+x = 2'          # the pull request only added line 2
+    roots = []
+    monkeypatch.setattr(app, 'run_semgrep', lambda **k: roots.append(k['repo_root']) or [dict(FINDING)])
     outcome = scan_fork_pr()
     assert github.contents_requests() == [(f'/repos/{BASE}/contents/main.py', {'ref': HEAD}),
                                           (f'/repos/{BASE}/contents/main.py', {'ref': MERGE_BASE})]
     assert [(p, params) for m, p, params in github.calls if '/compare/' in p] == [
         (f'/repos/{BASE}/compare/{BASE_SHA}...{HEAD}', {'per_page': 1, 'page': 2})]
     assert len(roots) == 2 and roots[0] != roots[1]
-    assert outcome == {'conclusion': 'failure', 'scan_error': None}   # its line changed: new P1
+    assert outcome == {'conclusion': 'success', 'scan_error': None}   # the base version has it: pre-existing

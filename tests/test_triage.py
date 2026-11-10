@@ -6,8 +6,8 @@ import pytest
 import app
 from analyzers import semgrep_runner as runner
 from analyzers.semgrep_runner import add_fingerprints, summarize_findings, to_github_annotations
-from analyzers.triage import (added_lines, baseline_counts, changed_lines, gate, is_source_path, is_test_path, priority,
-                              triage)
+from analyzers.triage import (added_lines, baseline_counts, changed_lines, gate, is_source_path, is_test_path,
+                              needs_base, priority, triage)
 
 # Two hunks: line 2 changed, line 3 added, then line 22 changed further down.
 PATCH = """@@ -1,4 +1,5 @@
@@ -415,3 +415,24 @@ def test_changed_file_list_records_where_each_file_was_before(monkeypatch):
     changed = app.list_changed_files('o', 'r', 1, 'fake', 1)
     assert changed == {'new.py': {1}, 'edited.py': {1}, 'src/moved.py': set()}
     assert changed.previous == {'edited.py': 'edited.py', 'src/moved.py': 'src/old.py'}
+
+
+def test_only_files_with_a_finding_on_untouched_lines_need_their_base_version():
+    findings = [finding('edited.py', 3), finding('edited.py', 9),        # line 9 untouched: needs the base
+                finding('rewritten.py', 2),                              # every finding on a changed line
+                finding('unknown.py', 4),                                # changes unknown: new anyway
+                finding('multi.py', 5, end=7)]                           # spans a changed line
+    changed = {'edited.py': {3}, 'rewritten.py': {2}, 'unknown.py': None, 'multi.py': {7}, 'clean.py': {1}}
+    assert needs_base(findings, changed) == ['edited.py']
+    assert needs_base([], changed) == []
+
+
+def test_pipeline_skips_the_base_version_when_every_finding_is_on_a_changed_line(tmp_path, monkeypatch):
+    scans = []
+    def scan(root):
+        scans.append(root.name)
+        return [finding('app.py', 1)]
+    (conclusion, _, _, _), downloads = run_pipeline_with_base(
+        tmp_path, monkeypatch, 'os.system(cmd)\n', 'x = 1\n', scan, {'app.py': {1}},
+        compare=lambda *a, **k: pytest.fail('no merge-base lookup needed'))
+    assert conclusion == 'failure' and scans == ['head'] and [d[0] for d in downloads] == ['a' * 40]

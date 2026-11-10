@@ -175,6 +175,21 @@ def baseline_counts(base_findings: List[Dict[str, Any]],
     return counts
 
 
+def needs_base(findings: List[Dict[str, Any]], changed: Dict[str, Optional[Set[int]]]) -> List[str]:
+    """The files whose base version decides a label: those with a finding on lines the change left alone.
+
+    A finding on a changed line is new, and so is every finding in a file whose
+    changes are unknown, whatever the base version holds. A file without findings
+    has nothing to label. Only the files returned here need their base version scanned.
+    """
+    paths = set()
+    for f in findings:
+        lines = changed.get(f["path"])
+        if lines is not None and not any(n in lines for n in range(f["start_line"], f["end_line"] + 1)):
+            paths.add(f["path"])
+    return sorted(paths)
+
+
 def triage(findings: List[Dict[str, Any]], changed: Dict[str, Optional[Set[int]]],
            baseline: Optional[Dict[str, Optional[Counter]]] = None) -> List[Dict[str, Any]]:
     """Label each finding new or pre-existing, give it a priority, and sort P1 first.

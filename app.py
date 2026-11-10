@@ -37,7 +37,7 @@ os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 # --- analyzers (our runner) ---
 from analyzers.semgrep_runner import (SemgrepInvocationError, add_fingerprints, run_semgrep, to_github_annotations,
                                       summarize_findings)
-from analyzers.triage import baseline_counts, changed_lines, gate, is_source_path, triage
+from analyzers.triage import baseline_counts, changed_lines, gate, is_source_path, needs_base, triage
 
 # PyJWT optional
 try:
@@ -494,13 +494,14 @@ def run_semgrep_pipeline(
                 exclude=ex, timeout_s=SEMGREP_TIMEOUT_S,
             ), str(repo_root))
 
-            # 4b) Scan the base versions of the same files: a finding on untouched lines is
-            # pre-existing only if the file had it before the pull request.
+            # 4b) A finding on untouched lines is pre-existing only if the file had it before the
+            # pull request, so the base versions of those files (and only those) are scanned too.
             baseline = None
             base_note = ""
             compare_base = expected_base_sha or base_sha or current_base_sha
-            if compare_base and findings:
-                baseline = base_version_findings(base_owner, base_repo, compare_base, head_sha, changed, existing,
+            to_compare = needs_base(findings, changed)
+            if compare_base and to_compare:
+                baseline = base_version_findings(base_owner, base_repo, compare_base, head_sha, changed, to_compare,
                                                  token, installation_id, tdp, cfg_value, ex)
                 if baseline is None:
                     baseline = {}

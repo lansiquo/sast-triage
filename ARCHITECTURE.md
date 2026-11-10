@@ -20,7 +20,7 @@ flowchart TD
         CHK --> FILES["Changed files + diffs<br/>.py .js .jsx .mjs .cjs .ts .tsx"]
         FILES --> FETCH["Only those files at the head commit<br/>contents API, 1 MiB each, no archive"]
         FETCH --> SG["Semgrep, service-owned rules only<br/>host subprocess or rootless Docker"]
-        SG --> BASE["Base versions of the same files<br/>fetched at the merge base, scanned the same way"]
+        SG --> BASE["Base versions of files with findings<br/>on untouched lines, fetched at the merge base"]
         BASE --> TRI["Triage: new / pre-existing,<br/>P1–P3, gate"]
         TRI --> ANN["Complete Check Run<br/>summary + up to 200 annotations"]
     end

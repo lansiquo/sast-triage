@@ -173,8 +173,9 @@ supply-chain safety.
 
 **New or pre-existing.** A finding is new if it covers a line the pull request (or, from the command line,
 the changes since `--base`) added or changed. A finding on untouched lines is new too when the file didn't
-have it before: the base version of each changed file is scanned as well, so editing one line can't slip
-in a finding on another. Changing `const cmd = 'ls'` to `'ls ' + req.query.dir` makes the untouched
+have it before: the base version of a changed file is scanned too, so editing one line can't slip in a
+finding on another. Only files with a finding on untouched lines need it, so most pull requests are
+scanned once. Changing `const cmd = 'ls'` to `'ls ' + req.query.dir` makes the untouched
 `exec(cmd)` below it a new P1. Pre-existing findings are still reported, as notices.
 
 - No diff for a file (too large or unreadable): every finding in it counts as new.

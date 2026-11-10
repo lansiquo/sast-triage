@@ -23,7 +23,8 @@ from pathlib import Path
 
 from analyzers.semgrep_runner import (NEW_LEGEND, SemgrepInvocationError, add_fingerprints, run_semgrep,
                                       summarize_findings)
-from analyzers.triage import NOT_IN_BASE, added_lines, baseline_counts, gate, is_source_path, is_test_path, triage
+from analyzers.triage import (NOT_IN_BASE, added_lines, baseline_counts, gate, is_source_path, is_test_path,
+                              needs_base, triage)
 from trusted_rules import OFFLINE_RULESET
 
 # Dependencies, build output and VCS metadata. The runner never scans the
@@ -110,13 +111,15 @@ def changes_since(root: Path, base: str):
 
 
 def base_findings(root: Path, base: str, previous: dict, config: str, timeout: int):
-    """Scan the base version of each changed file and count its findings, keyed by the head path.
+    """Scan the base version of each file in `previous` and count its findings, keyed by the head path.
 
     The base version is the file at the merge base of `base` and HEAD, read from
     git and scanned in a temporary folder. A file that is missing there, too large
     or unsafe to place is left out, so its findings count as new. Returns None when
     the base versions cannot be scanned at all.
     """
+    if not previous:
+        return {}
     merge_base = git(root, 'merge-base', base, 'HEAD').strip()
     baseline = {}
     with tempfile.TemporaryDirectory(prefix='prsec_scan_base_') as temporary:
@@ -225,9 +228,10 @@ def main(argv=None):
                 print(f'error: scan incomplete, no result issued.\n{error}', file=sys.stderr)
                 return ERROR
             if args.base:
+                # Only files with a finding on untouched lines need their base version.
                 try:
-                    baseline = base_findings(root, args.base, {p: previous[p] for p in files if p in previous},
-                                             str(config), args.timeout)
+                    baseline = base_findings(root, args.base, {p: previous[p] for p in needs_base(findings, changed)
+                                                               if p in previous}, str(config), args.timeout)
                 except DiffError as error:
                     print(f'error: cannot read the base versions from {args.base}, no result issued.\n{error}',
                           file=sys.stderr)
