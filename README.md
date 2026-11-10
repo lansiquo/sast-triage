@@ -1,9 +1,9 @@
 # sast-triage
 
 A Semgrep reviewer for Python, JavaScript and TypeScript, run from the command line, as a GitHub Action
-or as a GitHub App service. It labels each finding **new** or **pre-existing** from the diff, ranks it
-**P1–P3**, and fails only on new P1 findings, so a pull request is blocked by what it introduced, not by
-what was already there.
+or as a GitHub App service. It labels each finding **new** or **pre-existing** by comparing the change with
+the code before it, ranks it **P1–P3**, and fails only on new P1 findings, so a pull request is blocked by
+what it introduced, not by what was already there.
 
 A Semgrep step in a repository's own CI reports every finding with the same urgency, and the pull request
 can edit that step. `sast-triage` runs 41 service-owned rules for high-signal patterns (`.py`, `.js`,
@@ -137,8 +137,9 @@ scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--timeout SECOND
 Without `--base`, every supported file is scanned and every finding counts as new, so on an existing
 codebase findings that were already there count too. With `--base REF`, only the files changed since the
 merge base of `REF` and `HEAD` are scanned, and a finding is new when it covers a line they added or
-changed, or when the file didn't have it at the merge base: the same labels a pull request gets. `--json` prints the result as JSON, `--markdown FILE` also
-writes the Markdown summary, and `--timeout` limits the scan (default 300 seconds).
+changed, or when the file didn't have it at the merge base: the same labels a pull request gets. `--json`
+prints the result as JSON, `--markdown FILE` also writes the Markdown summary, and `--timeout` limits the
+scan (default 300 seconds).
 
 Files in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv folders, and minified
 `*.min.js` files, are skipped. The project's own Semgrep rules, ignore files and git diff helpers are not used.
