@@ -1,10 +1,13 @@
 """Triage: which findings a pull request introduced, and how urgent they are. Offline only."""
+from pathlib import Path
+
 import pytest
 
 import app
 from analyzers import semgrep_runner as runner
-from analyzers.semgrep_runner import summarize_findings, to_github_annotations
-from analyzers.triage import added_lines, changed_lines, gate, is_source_path, is_test_path, priority, triage
+from analyzers.semgrep_runner import add_fingerprints, summarize_findings, to_github_annotations
+from analyzers.triage import (added_lines, baseline_counts, changed_lines, gate, is_source_path, is_test_path, priority,
+                              triage)
 
 # Two hunks: line 2 changed, line 3 added, then line 22 changed further down.
 PATCH = """@@ -1,4 +1,5 @@
@@ -297,3 +300,118 @@ def test_new_p1_fails_the_check_and_comes_first(tmp_path, monkeypatch):
     assert '**Gate: FAIL** — 1 new P1 finding' in summary and '`app.py:3` py-rule' in summary
     assert [a['annotation_level'] for a in annotations] == ['failure', 'notice', 'notice']
     assert annotations[0]['start_line'] == 3
+
+
+# A finding on untouched lines is pre-existing only if the base version of the file has it too.
+
+def test_untouched_finding_is_new_unless_the_base_version_has_it():
+    head = [finding('app.py', 4, fingerprint='exec'), finding('app.py', 9, fingerprint='md5')]
+    changed = {'app.py': {3}}                                    # neither finding's line was edited
+    base = baseline_counts([finding('app.py', 8, fingerprint='md5')])   # the md5 call was there, one line higher
+    by_line = {f['start_line']: (f['new'], f['new_because']) for f in triage(head, changed, base)}
+    assert by_line == {4: (True, 'not in the base version'), 9: (False, None)}
+    assert gate(triage(head, changed, base)) == 'failure'
+    # Without a baseline only the changed lines decide, as before.
+    assert [f['new'] for f in triage(head, changed)] == [False, False]
+    # A different rule on the same lines is a different finding.
+    other = baseline_counts([finding('app.py', 4, fingerprint='exec', rule_id='another-rule')])
+    assert triage(head[:1], changed, other)[0]['new']
+
+
+def test_baseline_matching_is_per_file_counted_and_fails_closed():
+    twice = [finding('app.py', 2, fingerprint='x'), finding('app.py', 7, fingerprint='x')]
+    once = baseline_counts([finding('app.py', 2, fingerprint='x')])
+    # The base had this finding once: the second copy is new.
+    assert [(f['start_line'], f['new']) for f in triage(twice, {'app.py': {20}}, once)] == [(7, True), (2, False)]
+    # A copy on a changed line is new without using up the base's match.
+    labels = {f['start_line']: f['new_because'] for f in triage(twice, {'app.py': {2}}, once)}
+    assert labels == {2: 'changed lines', 7: None}
+    # Another file's baseline does not count, and neither does an unknown one (missing or None).
+    elsewhere = baseline_counts([finding('other.py', 2, fingerprint='x')])
+    for baseline in (elsewhere, {}, {'app.py': None}):
+        assert all(f['new'] for f in triage(twice, {'app.py': {20}}, baseline)), baseline
+    # A finding without a fingerprint (its file could not be read) never matches.
+    assert triage([finding('app.py', 2)], {'app.py': {20}}, baseline_counts([finding('app.py', 2)]))[0]['new']
+    # Renames: the base finding is counted under the file's new name.
+    renamed = baseline_counts([finding('old.py', 2, fingerprint='x')], {'old.py': 'app.py'})
+    assert not triage(twice[:1], {'app.py': set()}, renamed)[0]['new']
+    # Unknown changes still make everything new, whatever the base holds.
+    assert triage(twice[:1], {'app.py': None}, once)[0]['new_because'] == 'changes unknown'
+
+
+def test_fingerprints_ignore_line_numbers_and_indentation_but_not_content(tmp_path):
+    (tmp_path / 'a.py').write_text('import os\nos.system(cmd)\n')
+    (tmp_path / 'b.py').write_text('\n\nif ready:\n        os.system(cmd)   \n')
+    (tmp_path / 'c.py').write_text('os.system(other)\n')
+    found = add_fingerprints([finding('a.py', 2), finding('b.py', 4), finding('c.py', 1), finding('gone.py', 1)],
+                             str(tmp_path))
+    a, b, c, gone = (f['fingerprint'] for f in found)
+    assert a == b and a != c and len(a) == 16 and gone is None
+
+
+def run_pipeline_with_base(tmp_path, monkeypatch, head_text, base_text, scan, changed, compare=None):
+    """The real pipeline with a head and a base snapshot; `scan(root)` plays Semgrep for one snapshot."""
+    monkeypatch.setattr(app, 'MODE', 'local')
+    head, base = tmp_path / 'head', tmp_path / 'base'
+    for root, text in ((head, head_text), (base, base_text)):
+        root.mkdir(parents=True)
+        (root / 'app.py').write_text(text)
+    downloads = []
+    monkeypatch.setattr(app, 'download_tarball', lambda o, r, sha, *a: downloads.append(sha) or (head if sha == 'a' * 40 else base))
+    monkeypatch.setattr(app, 'list_changed_files', lambda *a: changed)
+    monkeypatch.setattr(app, '_get_json', compare or (lambda url, *a, **k: {'merge_base_commit': {'sha': 'c' * 40}}))
+    monkeypatch.setattr(app, 'run_semgrep', lambda **k: scan(Path(k['repo_root'])))
+    completed = []
+    monkeypatch.setattr(app, 'complete_check_run', lambda *a: completed.append(a))
+    app.run_semgrep_pipeline('o', 'r', 'o', 'r', 1, 'a' * 40, 1, 'o', 'r', 99, 'fake', base_sha='b' * 40)
+    return completed[0][3:7], downloads
+
+
+def test_pipeline_fails_when_a_change_elsewhere_introduces_a_finding_on_an_untouched_line(tmp_path, monkeypatch):
+    # The pull request edits line 1 only; line 2 is the same text in both versions,
+    # but only the head version produces the finding.
+    scan = lambda root: [finding('app.py', 2)] if root.name == 'head' else []
+    (conclusion, title, summary, annotations), downloads = run_pipeline_with_base(
+        tmp_path, monkeypatch, 'cmd = "ls " + request.args["dir"]\nos.system(cmd)\n', 'cmd = "ls"\nos.system(cmd)\n',
+        scan, {'app.py': {1}})
+    assert conclusion == 'failure' and title == '1 new P1 finding'
+    assert downloads == ['a' * 40, 'c' * 40]                      # the head, then the merge base
+    assert annotations[0]['annotation_level'] == 'failure'
+    assert 'these lines are unchanged, but the finding was not there before' in annotations[0]['raw_details']
+
+
+def test_pipeline_keeps_a_finding_pre_existing_when_the_base_version_has_it(tmp_path, monkeypatch):
+    scan = lambda root: [finding('app.py', 3 if root.name == 'head' else 2)]   # moved down one line, same text
+    (conclusion, _, summary, annotations), _ = run_pipeline_with_base(
+        tmp_path, monkeypatch, 'import os\n# note\nos.system(cmd)\n', 'import os\nos.system(cmd)\n',
+        scan, {'app.py': {2}})
+    assert conclusion == 'success' and '| P1 | 0 | 1 |' in summary
+    assert 'the finding was already there' in annotations[0]['raw_details']
+
+
+def test_pipeline_counts_everything_as_new_when_the_base_cannot_be_scanned_and_fails_closed_on_api_errors(
+        tmp_path, monkeypatch):
+    def scan(root):
+        if root.name == 'base':
+            raise runner.SemgrepInvocationError(2, ['semgrep'], '', 'base version does not parse')
+        return [finding('app.py', 2)]
+    (conclusion, _, summary, _), _ = run_pipeline_with_base(
+        tmp_path, monkeypatch, 'x = 1\nos.system(cmd)\n', 'x = (\nos.system(cmd)\n', scan, {'app.py': {1}})
+    assert conclusion == 'failure' and 'could not be scanned, so every finding counts as new' in summary
+
+    for attempt, reply in enumerate(({'merge_base_commit': {'sha': 'not-a-sha'}}, {}, [])):
+        (conclusion, _, summary, _), downloads = run_pipeline_with_base(
+            tmp_path / str(attempt), monkeypatch, 'x = 1\nos.system(cmd)\n', 'x = 1\nos.system(cmd)\n',
+            lambda root: [finding('app.py', 2)], {'app.py': {1}}, compare=lambda *a, _r=reply, **k: _r)
+        assert conclusion == 'failure' and summary.startswith('Scan incomplete') and downloads == ['a' * 40]
+
+
+def test_changed_file_list_records_where_each_file_was_before(monkeypatch):
+    files = [{'filename': 'new.py', 'status': 'added', 'patch': '@@ -0,0 +1 @@\n+x'},
+             {'filename': 'edited.py', 'status': 'modified', 'patch': '@@ -1 +1 @@\n-a\n+b'},
+             {'filename': 'src/moved.py', 'status': 'renamed', 'previous_filename': 'src/old.py', 'changes': 0},
+             {'filename': 'gone.py', 'status': 'removed'}]
+    monkeypatch.setattr(app, '_get_json', lambda *a, **k: files)
+    changed = app.list_changed_files('o', 'r', 1, 'fake', 1)
+    assert changed == {'new.py': {1}, 'edited.py': {1}, 'src/moved.py': set()}
+    assert changed.previous == {'edited.py': 'edited.py', 'src/moved.py': 'src/old.py'}

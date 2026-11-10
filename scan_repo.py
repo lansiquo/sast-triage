@@ -2,7 +2,8 @@
 
 Without --base there is no diff, so every finding counts as new. With
 --base REF, only the source files changed since REF are scanned, and a finding
-is new when it covers a line they added or changed, as for a pull request.
+is new when it covers a line they added or changed, or when the version of the
+file before those changes did not have it, as for a pull request.
 The scanned project is only read and parsed by Semgrep: never executed,
 imported or installed, and its own Semgrep rules and ignore files are not used.
 
@@ -17,10 +18,12 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
-from analyzers.semgrep_runner import SemgrepInvocationError, run_semgrep, summarize_findings
-from analyzers.triage import added_lines, gate, is_source_path, is_test_path, triage
+from analyzers.semgrep_runner import (NEW_LEGEND, SemgrepInvocationError, add_fingerprints, run_semgrep,
+                                      summarize_findings)
+from analyzers.triage import NOT_IN_BASE, added_lines, baseline_counts, gate, is_source_path, is_test_path, triage
 from trusted_rules import OFFLINE_RULESET
 
 # Dependencies, build output and VCS metadata. The runner never scans the
@@ -43,18 +46,22 @@ class DiffError(Exception):
     """git could not produce the diff against the base."""
 
 
-def git(root: Path, *args: str) -> str:
-    """Run git in the project without external diff drivers, text conversion or pagers."""
+def git(root: Path, *args: str, binary: bool = False):
+    """Run git in the project without external diff drivers, text conversion or pagers.
+
+    Returns its output as text, or as bytes with binary=True (for file contents).
+    """
     try:
         # The project's own git config must not run anything: no fsmonitor hook, no external diff.
         result = subprocess.run(['git', '-C', str(root), '-c', 'core.quotepath=off', '-c', 'core.fsmonitor=',
                                  '-c', 'diff.external=', *args],
-                                capture_output=True, text=True, timeout=120,
+                                capture_output=True, text=not binary, timeout=120,
                                 env={**os.environ, 'GIT_PAGER': 'cat', 'GIT_EXTERNAL_DIFF': ''})
     except (OSError, subprocess.TimeoutExpired) as error:
         raise DiffError(f'git failed: {error}') from error
     if result.returncode != 0:
-        raise DiffError(result.stderr.strip() or f'git {args[0]} failed')
+        stderr = result.stderr.decode('utf-8', 'replace') if binary else result.stderr
+        raise DiffError(stderr.strip() or f'git {args[0]} failed')
     return result.stdout
 
 
@@ -65,6 +72,9 @@ def changes_since(root: Path, base: str):
     and the same rules as the pull request path: a rename with no edits changed
     nothing, a move from test code to runtime code counts as entirely new, and
     a diff that does not parse is unknown (None), so every finding in it is new.
+
+    Also returns each file's path in the base (its old name after a rename);
+    a file the changes added has none.
     """
     if base.startswith('-'):
         raise DiffError(f'invalid base: {base}')
@@ -72,6 +82,7 @@ def changes_since(root: Path, base: str):
     spec = f'{base}...HEAD'
     fields = git(root, 'diff', '--relative', '--name-status', '-z', '-M', '--no-ext-diff', '--no-textconv', spec).split('\0')
     changed = {}
+    previous = {}
     i = 0
     while i < len(fields) - 1:
         status = fields[i]
@@ -83,6 +94,8 @@ def changes_since(root: Path, base: str):
             i += 2
         if status.startswith('D') or not scannable(path):
             continue
+        if not status.startswith('A'):
+            previous[path] = old if old is not None else path
         if old is not None and is_test_path(old) and not is_test_path(path):
             changed[path] = None
             continue
@@ -93,7 +106,46 @@ def changes_since(root: Path, base: str):
             changed[path] = set() if status.startswith('R') and 'Binary files' not in patch else None
         else:
             changed[path] = added_lines(patch[hunks + 1:])
-    return changed
+    return changed, previous
+
+
+def base_findings(root: Path, base: str, previous: dict, config: str, timeout: int):
+    """Scan the base version of each changed file and count its findings, keyed by the head path.
+
+    The base version is the file at the merge base of `base` and HEAD, read from
+    git and scanned in a temporary folder. A file that is missing there, too large
+    or unsafe to place is left out, so its findings count as new. Returns None when
+    the base versions cannot be scanned at all.
+    """
+    merge_base = git(root, 'merge-base', base, 'HEAD').strip()
+    baseline = {}
+    with tempfile.TemporaryDirectory(prefix='prsec_scan_base_') as temporary:
+        staging = Path(temporary).resolve()
+        staged = {}   # base path -> the head paths that came from it
+        for path, old in sorted(previous.items()):
+            target = (staging / old).resolve()
+            if not is_source_path(old) or not target.is_relative_to(staging) or target == staging:
+                continue
+            try:
+                content = git(root, 'show', f'{merge_base}:./{old}', binary=True)
+            except DiffError:
+                continue
+            if len(content) > MAX_FILE_BYTES:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            staged.setdefault(old, []).append(path)
+        if staged:
+            try:
+                found = add_fingerprints(run_semgrep(sorted(staged), str(staging), config=config, timeout_s=timeout),
+                                         str(staging))
+            except (SemgrepInvocationError, ValueError, RuntimeError, OSError):
+                return None
+            counts = baseline_counts(found)
+            for old, paths in staged.items():
+                for path in paths:
+                    baseline[path] = Counter(counts.get(old, Counter()))
+    return baseline
 
 
 def source_files(root: Path):
@@ -113,14 +165,16 @@ def print_summary(title, findings, conclusion, base=None):
     print(f'\n{title}: {conclusion.upper()}')
     for f in findings:
         label = 'new' if f['new'] else 'pre-existing'
-        print(f"  [{f['priority']}, {label}] {f['path']}:{f['start_line']}  {f['rule_id']}")
+        note = '  (line unchanged; not in the base version)' if f.get('new_because') == NOT_IN_BASE else ''
+        print(f"  [{f['priority']}, {label}] {f['path']}:{f['start_line']}  {f['rule_id']}{note}")
     print(markdown(findings, base))
 
 
 def markdown(findings, base=None):
     """The Check Run's Markdown summary, with the "new" legend worded for this kind of scan."""
-    meaning = f'New: on lines changed since {base}.' if base else 'New: every finding in a full scan.'
-    return summarize_findings(findings)[1].replace('New: on lines this pull request added or changed.', meaning)
+    meaning = (f'New: on lines changed since {base}, or not in the file before those changes.' if base
+               else 'New: every finding in a full scan.')
+    return summarize_findings(findings)[1].replace(NEW_LEGEND, meaning)
 
 
 def main(argv=None):
@@ -137,9 +191,10 @@ def main(argv=None):
     if not args.directory.is_dir():
         parser.error(f'not a directory: {args.directory}')
     root = args.directory.resolve()
+    previous = {}
     if args.base:
         try:
-            changed = changes_since(root, args.base)
+            changed, previous = changes_since(root, args.base)
         except DiffError as error:
             print(f'error: cannot diff against {args.base}, no result issued.\n{error}', file=sys.stderr)
             return ERROR
@@ -158,16 +213,30 @@ def main(argv=None):
         return ERROR
 
     findings = []
+    baseline = None   # full scan: there is no base version, and every finding is new anyway
     if files:
         with tempfile.TemporaryDirectory(prefix='prsec_scan_repo_') as temporary:
             config = Path(temporary) / 'rules.yaml'
             config.write_text(OFFLINE_RULESET)
             try:
-                findings = run_semgrep(files, str(root), config=str(config), timeout_s=args.timeout)
+                findings = add_fingerprints(run_semgrep(files, str(root), config=str(config), timeout_s=args.timeout),
+                                            str(root))
             except (SemgrepInvocationError, ValueError, RuntimeError, OSError) as error:
                 print(f'error: scan incomplete, no result issued.\n{error}', file=sys.stderr)
                 return ERROR
-    findings = triage(findings, changed)
+            if args.base:
+                try:
+                    baseline = base_findings(root, args.base, {p: previous[p] for p in files if p in previous},
+                                             str(config), args.timeout)
+                except DiffError as error:
+                    print(f'error: cannot read the base versions from {args.base}, no result issued.\n{error}',
+                          file=sys.stderr)
+                    return ERROR
+                if baseline is None:
+                    print('warning: the base versions of the changed files could not be scanned, '
+                          'so every finding counts as new.', file=sys.stderr)
+                    baseline = {}
+    findings = triage(findings, changed, baseline)
     conclusion = gate(findings) if files else 'neutral'
 
     if args.markdown:
@@ -181,7 +250,8 @@ def main(argv=None):
     else:
         if args.base:
             print(f'sast-triage scan of {args.directory}, changes since {args.base}')
-            print('A finding is new when it covers a line changed since the base; only a new P1 fails.')
+            print('A finding is new when it covers a line changed since the base, or was not in the file before; '
+                  'only a new P1 fails.')
             print(f'{len(files)} changed Python, JavaScript and TypeScript files, {RULE_COUNT} service-owned rules.')
             title = f'Changes since {args.base} ({len(files)} files)'
         else:

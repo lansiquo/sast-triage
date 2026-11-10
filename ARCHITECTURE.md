@@ -20,7 +20,8 @@ flowchart TD
         CHK --> TAR["Head-commit tarball<br/>bounded, safe extraction"]
         TAR --> FILES["Changed files + diffs<br/>.py .js .jsx .mjs .cjs .ts .tsx"]
         FILES --> SG["Semgrep, service-owned rules only<br/>host subprocess or rootless Docker"]
-        SG --> TRI["Triage: new / pre-existing,<br/>P1–P3, gate"]
+        SG --> BASE["Base versions of the same files<br/>merge-base tarball, scanned the same way"]
+        BASE --> TRI["Triage: new / pre-existing,<br/>P1–P3, gate"]
         TRI --> ANN["Complete Check Run<br/>summary + up to 200 annotations"]
     end
     W -. "durable: transient error / rate limit" .-> Q
@@ -34,7 +35,7 @@ flowchart TD
 | `job_store.py` | Durable mode's SQLite queue: idempotent enqueue, claim, retry with backoff, global rate-limit cooldown, recovery, heartbeat and status. |
 | `worker.py` | Durable mode's worker: drains the queue under an exclusive file lock, runs the pipeline and decides retry or failure. |
 | `analyzers/semgrep_runner.py` | Stages only the requested files, runs Semgrep (or an explicitly selected Opengrep) on the host or in the Docker sandbox, rejects incomplete output, builds annotations and the summary. Accepts only one local, service-owned rule file. |
-| `analyzers/triage.py` | Supported source files, diff parsing, new/pre-existing labels, test-code detection, P1–P3 and the gate. |
+| `analyzers/triage.py` | Supported source files, diff parsing, new/pre-existing labels (changed lines, then a comparison with the base version's findings), test-code detection, P1–P3 and the gate. |
 | `trusted_rules.py` | The 29 service-owned rules: 15 Python, 14 JavaScript and TypeScript. |
 | `scan_repo.py` | Command-line scan: every supported file outside dependency, build and VCS folders (every finding new), or with `--base REF` only the files changed since that ref, labelled from a local `git diff` with the pull request rules. Exit status 1 when the gate fails, 0 when it passes, 2 on an error. |
 | `action.yml` | GitHub Action: installs `requirements-cli.txt` with the runner's Python and runs `scan_repo.py` against the pull request's base branch. |
@@ -65,7 +66,7 @@ flowchart TD
 
 ## Failure handling
 
-- **Fail closed.** Scanner errors, malformed output, unknown severities and files Semgrep did not report as scanned fail the check; only a complete scan can pass. A missing or unreadable diff makes every finding in that file new.
+- **Fail closed.** Scanner errors, malformed output, unknown severities and files Semgrep did not report as scanned fail the check; only a complete scan can pass. A missing or unreadable diff makes every finding in that file new, and so does a base version that is missing, too large or not scannable. A failed merge-base lookup or base download fails the check.
 - **Deduplication (durable).** A job's id is the SHA-256 of its normalized payload, so redeliveries map to the existing job; a real reopen adds a hash of `X-GitHub-Delivery` and scans again.
 - **Retries (durable).** Transient failures requeue the job with backoff `min(300 s, 5 s × 2^attempts)`; after 8 attempts it is marked failed. Permanent GitHub errors fail it without retry and complete the Check as failure.
 - **Rate limits (durable).** HTTP 429, or 403 with `Retry-After` or `X-RateLimit-Remaining: 0`, pauses every claim for at least 60 s or the reset time, including after a restart.

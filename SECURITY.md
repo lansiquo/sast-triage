@@ -17,7 +17,7 @@ sast-triage runs from the command line and as a GitHub Action. The GitHub App se
 - Local mode keeps jobs in memory: a crash can leave incomplete Checks, and signed replays repeat scans.
 - Logs and findings can contain source-derived text; restrict access and retention.
 - A passing gate means the rules found no new P1 findings in the scanned Python, JavaScript and TypeScript files. It is not a security certification.
-- "Pre-existing" only means the line was not changed; a PR can make an untouched line match. A missing diff marks a file's findings as new. In local mode a push mid-scan can mislabel findings; durable mode cancels such scans.
+- "Pre-existing" means the line was not changed and the base version of the file already had the finding (same rule, same line text). A missing diff or an unscannable base version marks a file's findings as new. In local mode a push mid-scan can mislabel findings; durable mode cancels such scans.
 
 ## Durable mode and dependencies
 

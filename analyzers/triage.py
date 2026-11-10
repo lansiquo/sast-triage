@@ -6,6 +6,7 @@ function: no network, no files, no scanner calls.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional, Set
 
@@ -153,19 +154,64 @@ def priority(severity: str, test_code: bool, confidence: Optional[str] = None,
     return f"P{level}"
 
 
-def triage(findings: List[Dict[str, Any]], changed: Dict[str, Optional[Set[int]]]) -> List[Dict[str, Any]]:
+# Why a finding counts as new. A pre-existing finding has no reason (None).
+CHANGED_LINES = "changed lines"
+NOT_IN_BASE = "not in the base version"
+UNKNOWN_CHANGES = "changes unknown"
+
+
+def baseline_counts(base_findings: List[Dict[str, Any]],
+                    head_path: Optional[Dict[str, str]] = None) -> Dict[str, Counter]:
+    """Count the findings in the base version of each file, keyed by the file's path in the head.
+
+    `head_path` maps a base path to the head path of the same file (for renames). A
+    finding is identified by its rule and the fingerprint of the lines it covers, so
+    it is recognised in the head whatever line it has moved to.
+    """
+    counts: Dict[str, Counter] = {}
+    for f in base_findings:
+        path = (head_path or {}).get(f["path"], f["path"])
+        counts.setdefault(path, Counter())[(f["rule_id"], f.get("fingerprint"))] += 1
+    return counts
+
+
+def triage(findings: List[Dict[str, Any]], changed: Dict[str, Optional[Set[int]]],
+           baseline: Optional[Dict[str, Optional[Counter]]] = None) -> List[Dict[str, Any]]:
     """Label each finding new or pre-existing, give it a priority, and sort P1 first.
 
     `changed` comes from list_changed_files. A finding is new when any line it
     covers was added or changed. A file whose changes are unknown (None), or
     that is missing from `changed`, counts as entirely new.
+
+    `baseline` (from baseline_counts) holds the findings of each changed file's
+    base version. With it, a finding on untouched lines is pre-existing only if
+    the base version has it too: a change elsewhere in the file (a variable that
+    now carries request data, a new import) can make an untouched line match, and
+    that finding was introduced by the change. A file missing from `baseline`, or
+    mapped to None, has an unknown base version, so its findings are new. Without
+    a baseline (None) only the changed lines decide.
     """
+    remaining = {path: Counter(counts) for path, counts in (baseline or {}).items() if counts is not None}
     ranked = []
-    for f in findings:
+    # In file and line order, so the same finding listed twice is matched to the base predictably.
+    for f in sorted(findings, key=lambda f: (f["path"], f["start_line"], f["end_line"], f["rule_id"])):
         lines = changed.get(f["path"])
-        new = lines is None or any(n in lines for n in range(f["start_line"], f["end_line"] + 1))
+        if lines is None:
+            reason = UNKNOWN_CHANGES
+        elif any(n in lines for n in range(f["start_line"], f["end_line"] + 1)):
+            reason = CHANGED_LINES
+        elif baseline is None:
+            reason = None
+        else:
+            key = (f["rule_id"], f.get("fingerprint"))
+            counts = remaining.get(f["path"])
+            if counts is not None and f.get("fingerprint") and counts[key] > 0:
+                counts[key] -= 1
+                reason = None
+            else:
+                reason = NOT_IN_BASE
         test_code = is_test_path(f["path"])
-        ranked.append(dict(f, new=new, test_code=test_code,
+        ranked.append(dict(f, new=reason is not None, new_because=reason, test_code=test_code,
                            priority=priority(f["severity"], test_code, f.get("confidence"), f.get("likelihood"))))
     # P1 first, new before pre-existing, then by file and line.
     ranked.sort(key=lambda f: (PRIORITY_ORDER[f["priority"]], not f["new"], f["path"], f["start_line"]))

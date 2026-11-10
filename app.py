@@ -16,6 +16,7 @@ import hmac
 import tarfile
 import hashlib
 import tempfile
+from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -34,8 +35,9 @@ os.environ.setdefault("PRSEC_SEMGREP_MIN_SEVERITY", "LOW")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
 # --- analyzers (our runner) ---
-from analyzers.semgrep_runner import run_semgrep, to_github_annotations, summarize_findings
-from analyzers.triage import changed_lines, gate, is_source_path, triage
+from analyzers.semgrep_runner import (SemgrepInvocationError, add_fingerprints, run_semgrep, to_github_annotations,
+                                      summarize_findings)
+from analyzers.triage import baseline_counts, changed_lines, gate, is_source_path, triage
 
 # PyJWT optional
 try:
@@ -59,6 +61,7 @@ SECRETS = [s.strip() for s in (os.getenv("GITHUB_WEBHOOK_SECRETS") or WEBHOOK_SE
 # Authentication cannot be disabled by a stale development environment.
 MAX_WEBHOOK_BYTES = 1024 * 1024
 MAX_ARCHIVE_BYTES = 25 * 1024 * 1024
+MAX_SOURCE_BYTES = 1024 * 1024   # the scanner's per-file limit
 MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 10000
 SCAN_SLOTS = threading.BoundedSemaphore(2)
@@ -291,9 +294,20 @@ def complete_check_run(owner: str, repo: str, check_id: int, conclusion: str, ti
         _patch_json(url, token, {"output": {"title": title, "summary": summary, "annotations": batch}}, install_id=install_id)
 
 # ---------- Repo utilities ----------
+class ChangedFiles(dict):
+    """list_changed_files' result, which also knows where each file was before the pull request.
+
+    `previous` maps a file to its path in the base (its old name after a rename);
+    a file the pull request added is not in it.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.previous: Dict[str, str] = {}
+
+
 def list_changed_files(owner: str, repo: str, pr: int, token: str, install_id: Optional[int]) -> Dict[str, Optional[Set[int]]]:
     """Map each changed, non-deleted file to the lines the PR added or changed (None = unknown)."""
-    files: Dict[str, Optional[Set[int]]] = {}
+    files = ChangedFiles()
     page = 1
     while page <= 30:
         js = _get_json(f"{GITHUB_API}/repos/{owner}/{repo}/pulls/{pr}/files", token, params={"per_page": 100, "page": page}, install_id=install_id)
@@ -301,7 +315,13 @@ def list_changed_files(owner: str, repo: str, pr: int, token: str, install_id: O
             raise RuntimeError('Invalid PR file list')
         if not js:
             break
-        files.update((x['filename'], changed_lines(x)) for x in js if x.get('status') != 'removed')
+        for x in js:
+            if x.get('status') == 'removed':
+                continue
+            files[x['filename']] = changed_lines(x)
+            if x.get('status') != 'added':
+                old = x.get('previous_filename')
+                files.previous[x['filename']] = old if isinstance(old, str) and old else x['filename']
         if len(js) < 100:
             break
         page += 1
@@ -338,6 +358,59 @@ def download_tarball(owner: str, repo: str, sha: str, token: str, install_id: Op
         repo_root = subs[0]
     return repo_root
 
+def merge_base_sha(owner: str, repo: str, base_sha: str, head_sha: str, token: str, install_id: Optional[int]) -> str:
+    """The commit GitHub diffs a pull request against: the merge base of its base and head."""
+    # Page 2 with one commit per page: the file list and patches are only on page 1.
+    js = _get_json(f"{GITHUB_API}/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}", token,
+                   params={"per_page": 1, "page": 2}, install_id=install_id)
+    sha = js.get('merge_base_commit', {}).get('sha') if isinstance(js, dict) and isinstance(js.get('merge_base_commit'), dict) else None
+    if not isinstance(sha, str) or not re.fullmatch(r'[0-9a-f]{40}', sha):
+        raise RuntimeError('Invalid compare response')
+    return sha
+
+
+def base_version_findings(owner: str, repo: str, base_sha: str, head_sha: str, changed: Dict[str, Optional[Set[int]]],
+                          sources: List[str], token: str, install_id: Optional[int], workdir: Path,
+                          config: str, exclude: List[str]) -> Optional[Dict[str, Counter]]:
+    """Scan the base version of each changed source file and count its findings, keyed by the head path.
+
+    The base version is the file at the pull request's merge base, from a second
+    snapshot with the same archive limits. A file that is missing there, too large
+    or not a regular file is left out, so its findings count as new. Returns None
+    when the scanner cannot scan the base versions; download and API errors raise.
+    """
+    previous = getattr(changed, 'previous', None)
+    if previous is None:
+        previous = {path: path for path in changed}
+    base_dir = workdir / 'base'
+    base_dir.mkdir()
+    base_root = download_tarball(owner, repo, merge_base_sha(owner, repo, base_sha, head_sha, token, install_id),
+                                 token, install_id, base_dir)
+    resolved_root = base_root.resolve()
+    staged: Dict[str, List[str]] = {}   # base path -> the head paths that came from it
+    for path in sources:
+        old = previous.get(path)
+        if not isinstance(old, str) or not is_source_path(old) or Path(old).is_absolute():
+            continue
+        candidate = base_root / old
+        if (not candidate.resolve().is_relative_to(resolved_root) or candidate.is_symlink()
+                or not candidate.is_file() or candidate.stat().st_size > MAX_SOURCE_BYTES):
+            continue
+        staged.setdefault(old, []).append(path)
+    baseline: Dict[str, Counter] = {}
+    if staged:
+        try:
+            found = add_fingerprints(run_semgrep(paths=sorted(staged), repo_root=str(base_root), config=config,
+                                                 exclude=exclude, timeout_s=SEMGREP_TIMEOUT_S), str(base_root))
+        except SemgrepInvocationError:
+            return None
+        counts = baseline_counts(found)
+        for old, paths in staged.items():
+            for path in paths:
+                baseline[path] = Counter(counts.get(old, Counter()))
+    return baseline
+
+
 # ---------- Scanning pipeline ----------
 def run_semgrep_pipeline(
     base_owner: str,
@@ -353,6 +426,7 @@ def run_semgrep_pipeline(
     token: str,
     expected_base_sha: Optional[str] = None,
     expected_base_ref: Optional[str] = None,
+    base_sha: Optional[str] = None,
 ) -> Optional[dict]:
     conclusion = "failure"
     title = f"{CHECK_NAME} results"
@@ -381,6 +455,7 @@ def run_semgrep_pipeline(
                 raise
 
     defer_completion = False
+    current_base_sha = None   # the base commit GitHub reports for the pull request, when it was looked up
     try:
         with tempfile.TemporaryDirectory(prefix="prsec_") as td:
             tdp = Path(td)
@@ -407,6 +482,9 @@ def run_semgrep_pipeline(
                     conclusion = "cancelled"
                     summary = "PR closed or changed during preparation; this job was not scanned."
                     return
+                sha = current.get('base', {}).get('sha') if isinstance(current.get('base'), dict) else None
+                if isinstance(sha, str) and re.fullmatch(r'[0-9a-f]{40}', sha):
+                    current_base_sha = sha
             for name in changed:
                 candidate = repo_root / name
                 if Path(name).is_absolute() or not candidate.resolve().is_relative_to(repo_root.resolve()):
@@ -433,10 +511,23 @@ def run_semgrep_pipeline(
             log.info("Scan root=%s file_count=%d sample=%s", repo_root, len(existing), existing[:10])
 
             # 4) Run Semgrep
-            findings = run_semgrep(
+            findings = add_fingerprints(run_semgrep(
                 paths=existing, repo_root=str(repo_root), config=cfg_value,
                 exclude=ex, timeout_s=SEMGREP_TIMEOUT_S,
-            )
+            ), str(repo_root))
+
+            # 4b) Scan the base versions of the same files: a finding on untouched lines is
+            # pre-existing only if the file had it before the pull request.
+            baseline = None
+            base_note = ""
+            compare_base = expected_base_sha or base_sha or current_base_sha
+            if compare_base and findings:
+                baseline = base_version_findings(base_owner, base_repo, compare_base, head_sha, changed, existing,
+                                                 token, installation_id, tdp, cfg_value, ex)
+                if baseline is None:
+                    baseline = {}
+                    base_note = ("\n\nThe base versions of the changed files could not be scanned, "
+                                 "so every finding counts as new.")
 
             # A PR can close or advance while Semgrep is running.
             if MODE == 'durable':
@@ -448,8 +539,9 @@ def run_semgrep_pipeline(
                     return
 
             # 5) Triage, summarize & annotate (sorted P1 first, so the cap never drops a P1 for a P3)
-            findings = triage(findings, changed)
+            findings = triage(findings, changed, baseline)
             counts, summary_md = summarize_findings(findings)
+            summary_md += base_note
             annotations = to_github_annotations(findings)[:MAX_ANNOTS]
 
             # Only new P1 findings fail the check; everything else stays annotated.
@@ -483,9 +575,9 @@ def run_semgrep_pipeline(
             _safe_complete()
     return {'conclusion': conclusion, 'scan_error': scan_error}
 
-def _run_reserved_scan(*args):
+def _run_reserved_scan(*args, **kwargs):
     try:
-        run_semgrep_pipeline(*args)
+        run_semgrep_pipeline(*args, **kwargs)
     finally:
         SCAN_SLOTS.release()
 
@@ -632,6 +724,7 @@ async def webhook(
             _run_reserved_scan,
             base_owner, base_repo, head_owner, head_repo, pr_number, head_sha,
             installation_id, check_owner, check_repo, check_id, token,
+            base_sha=base_sha,
         )
 
 

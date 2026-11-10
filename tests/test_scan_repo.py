@@ -173,7 +173,7 @@ def test_base_passes_when_only_pre_existing_findings_remain(tmp_path, capsys):
     assert scan_repo.main([str(root), '--base', 'main']) == 0
     out = capsys.readouterr().out
     assert '[P1, pre-existing] src/legacy.py:2  py-weak-md5' in out and '**Gate: PASS**' in out
-    assert 'New: on lines changed since main.' in out
+    assert 'New: on lines changed since main, or not in the file before those changes.' in out
 
 
 def test_base_on_a_subfolder_uses_paths_relative_to_it(tmp_path, capsys):
@@ -262,3 +262,64 @@ def test_text_report_says_so_when_there_is_nothing_to_scan(tmp_path, capsys):
     out = capsys.readouterr().out
     assert '0 Python, JavaScript and TypeScript files, 29 service-owned rules.' in out
     assert 'No supported Python, JavaScript or TypeScript files to scan.' in out and 'Gate' not in out
+
+
+# --base: a finding on an untouched line is new when the base version of the file did not have it.
+
+SERVER = ("const { exec } = require('child_process');\n"
+          "module.exports = (req, res) => {\n"
+          "  const cmd = %s;\n"
+          "  exec(cmd, (e, out) => res.send(out));\n"
+          "};")
+
+
+def introduced_elsewhere(tmp_path, folder=''):
+    """main runs a fixed command; the branch edits only the line above the exec call."""
+    project(tmp_path, {f'{folder}server.js': SERVER % "'ls -la'", f'{folder}other.js': 'const n = 1;'})
+    git(tmp_path, 'init', '-q', '-b', 'main')
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'base')
+    git(tmp_path, 'switch', '-q', '-c', 'feature')
+    project(tmp_path, {f'{folder}server.js': SERVER % "'ls -la ' + req.query.dir"})
+    git(tmp_path, 'commit', '-q', '-am', 'take the folder from the request')
+    return tmp_path
+
+
+def test_base_fails_when_a_change_on_another_line_introduces_the_finding(tmp_path, capsys):
+    root = introduced_elsewhere(tmp_path)
+    git(root, 'switch', '-q', 'main')
+    assert scan_repo.main([str(root), '--json']) == 0             # the base alone is clean: the command is a constant
+    assert json.loads(capsys.readouterr().out)['findings'] == []
+    git(root, 'switch', '-q', 'feature')
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert [(f['path'], f['start_line'], f['rule_id'], f['priority'], f['new'], f['new_because'])
+            for f in report['findings']] == [
+        ('server.js', 4, 'js-child-process-exec', 'P1', True, 'not in the base version')]   # line 4 itself is unchanged
+    assert scan_repo.main([str(root), '--base', 'main']) == 1
+    out = capsys.readouterr().out
+    assert '[P1, new] server.js:4  js-child-process-exec  (line unchanged; not in the base version)' in out
+    assert 'A finding is new when it covers a line changed since the base, or was not in the file before' in out
+
+
+def test_base_reads_base_versions_relative_to_a_scanned_subfolder(tmp_path, capsys):
+    root = introduced_elsewhere(tmp_path, folder='svc/')
+    assert scan_repo.main([str(root / 'svc'), '--base', 'main', '--json']) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert [(f['path'], f['new_because']) for f in report['findings']] == [('server.js', 'not in the base version')]
+
+
+def test_base_counts_every_finding_as_new_when_the_base_versions_cannot_be_scanned(tmp_path, monkeypatch, capsys):
+    root = repository(tmp_path)
+    real, calls = scan_repo.run_semgrep, []
+
+    def head_only(paths, repo_root, **options):
+        calls.append(repo_root)
+        if len(calls) > 1:                                        # the second scan is the base versions
+            raise runner.SemgrepInvocationError(2, ['semgrep'], '', 'the old version does not parse')
+        return real(paths, repo_root, **options)
+    monkeypatch.setattr(scan_repo, 'run_semgrep', head_only)
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1
+    captured = capsys.readouterr()
+    assert 'could not be scanned, so every finding counts as new' in captured.err
+    assert all(f['new'] for f in json.loads(captured.out)['findings']) and len(calls) == 2

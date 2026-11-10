@@ -84,7 +84,7 @@ The output, without the legend:
 
 ```text
 sast-triage scan of NodeGoat, changes since HEAD~2
-A finding is new when it covers a line changed since the base; only a new P1 fails.
+A finding is new when it covers a line changed since the base, or was not in the file before; only a new P1 fails.
 2 changed Python, JavaScript and TypeScript files, 29 service-owned rules.
 Skipped: .git, node_modules, vendor, dist, build, coverage, .hg, .svn, .venv, venv, __pycache__ folders and minified *.min.js files.
 
@@ -134,7 +134,7 @@ scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--timeout SECOND
 Without `--base`, every supported file is scanned and every finding counts as new, so on an existing
 codebase findings that were already there count too. With `--base REF`, only the files changed since the
 merge base of `REF` and `HEAD` are scanned, and a finding is new when it covers a line they added or
-changed: the same labels a pull request gets. `--json` prints the result as JSON, `--markdown FILE` also
+changed, or when the file didn't have it at the merge base: the same labels a pull request gets. `--json` prints the result as JSON, `--markdown FILE` also
 writes the Markdown summary, and `--timeout` limits the scan (default 300 seconds).
 
 Files in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv folders, and minified
@@ -169,9 +169,13 @@ supply-chain safety.
 | **P3** | Everything else | Reported; a notice on the Check Run |
 
 **New or pre-existing.** A finding is new if it covers a line the pull request (or, from the command line,
-the changes since `--base`) added or changed. Pre-existing findings are still reported, as notices.
+the changes since `--base`) added or changed. A finding on untouched lines is new too when the file didn't
+have it before: the base version of each changed file is scanned as well, so editing one line can't slip
+in a finding on another. Changing `const cmd = 'ls'` to `'ls ' + req.query.dir` makes the untouched
+`exec(cmd)` below it a new P1. Pre-existing findings are still reported, as notices.
 
 - No diff for a file (too large or unreadable): every finding in it counts as new.
+- Base version missing, over 1 MiB or not scannable: every finding in the file counts as new.
 - Renamed with no changes: unchanged.
 - Renamed or copied from test code to runtime code: every finding counts as new, since its priority went up.
 
@@ -248,8 +252,9 @@ rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy
 
 - **Rules match within one file.** A value that passes through another function or module before it
   reaches a dangerous call is not traced.
-- **Pre-existing means untouched, not unrelated.** A change elsewhere (for example, a new import) can make
-  an untouched line match; that finding stays pre-existing and doesn't fail the gate.
+- **New is judged file by file.** A finding is matched to the base version by its rule and the text of
+  the lines it covers. Only changed files are scanned, so a change in one file can't raise a finding in
+  another that it didn't touch.
 - **Size limits fail closed:** 1 MiB per scanned file; for the GitHub App also a 1 MiB webhook body,
   25 MiB archive, 100 MiB extracted, 10,000 archive members and 3,000 changed files.
 - **Local mode is not an OS sandbox.** It strips credentials from the scanner and stages only the selected

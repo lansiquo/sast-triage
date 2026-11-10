@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -17,6 +18,46 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # --------------------------------- Public API ---------------------------------
+
+# The summary's explanation of "new"; scan_repo.py rewords it for a command-line scan.
+NEW_LEGEND = ("New: on lines this pull request added or changed, or not found in the "
+              "version of the file it started from.")
+
+
+def add_fingerprints(findings: List[Dict[str, Any]], repo_root: str) -> List[Dict[str, Any]]:
+    """Give each finding a fingerprint of the source lines it covers.
+
+    The fingerprint ignores line numbers and whitespace, so the same finding is
+    recognised in another version of the file even after it has moved. A file
+    that cannot be read leaves the fingerprint as None, which never matches.
+    """
+    cache: Dict[str, Optional[List[str]]] = {}
+    out = []
+    for f in findings:
+        path = f["path"]
+        if path not in cache:
+            try:
+                # Rows split on "\n" only, the way Git and Semgrep count lines.
+                cache[path] = (Path(repo_root) / path).read_bytes().decode("utf-8", "replace").split("\n")
+            except OSError:
+                cache[path] = None
+        rows = cache[path]
+        fingerprint = None
+        if rows is not None:
+            covered = " ".join(" ".join(rows[f["start_line"] - 1:f["end_line"]]).split())
+            fingerprint = hashlib.sha256(covered.encode("utf-8")).hexdigest()[:16]
+        out.append(dict(f, fingerprint=fingerprint))
+    return out
+
+
+def _status_line(f: Dict[str, Any]) -> str:
+    if not f["new"]:
+        return "Status: pre-existing (this pull request did not change these lines, and the finding was already there)"
+    if f.get("new_because") == "not in the base version":
+        return ("Status: new (these lines are unchanged, but the finding was not there before this pull "
+                "request: a change elsewhere in the file introduced it)")
+    return "Status: new (treat it as introduced by this pull request)"
+
 
 @dataclass
 class SemgrepInvocationError(Exception):
@@ -211,8 +252,7 @@ def to_github_annotations(
         code = "test" if f["test_code"] else "runtime"
         meta: List[str] = [
             f"Priority: {f['priority']} ({f['severity'].lower()} severity, {code} code)",
-            "Status: new (treat it as introduced by this pull request)" if f["new"]
-            else "Status: pre-existing (this pull request did not change these lines)",
+            _status_line(f),
         ]
         for rating in ("confidence", "likelihood"):
             if f.get(rating):
@@ -269,8 +309,7 @@ def summarize_findings(findings: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[s
         *(f"| {p} | {c['new']} | {c['pre-existing']} |" for p, c in counts.items()),
         "",
         "P1: high or critical severity in runtime code. P2: high or critical in test code, "
-        "or medium in runtime code. P3: everything else. New: on lines this pull request "
-        "added or changed.",
+        "or medium in runtime code. P3: everything else. " + NEW_LEGEND,
     ]
     return counts, "\n".join(md)
 

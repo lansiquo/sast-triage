@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- **A pull request could introduce a finding without failing the gate.** A finding counted as new only when one of its own lines changed, so editing the line above a call could make it dangerous while it stayed "pre-existing": changing `const cmd = 'ls -la'` to `'ls -la ' + req.query.dir` left the untouched `exec(cmd)` as `[P1, pre-existing]` and the gate passed. The base version of each changed file is now scanned too (the merge base, from git for `scan_repo.py --base` and from a second snapshot for the GitHub App), and a finding on untouched lines is pre-existing only if the base version has it, matched by rule and the text of the lines it covers. A base version that is missing, over 1 MiB or not scannable makes the file's findings new. Findings carry `new_because` and `fingerprint` in the JSON output.
+
 ### Changed
 - `requirements.txt` pins `semgrep==1.79.0`, as `requirements-cli.txt` already did. It used to resolve to 1.79.0 only because newer Semgrep conflicts with FastAPI.
 
