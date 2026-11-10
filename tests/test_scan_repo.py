@@ -210,3 +210,55 @@ def test_the_command_line_scan_needs_none_of_the_web_service_packages():
     assert result.stdout.strip() == '[]', result.stderr
     required = (ROOT / 'requirements-cli.txt').read_text()
     assert 'semgrep==1.79.0' in required and 'fastapi' not in required
+
+
+# Error and edge paths a user can hit from the command line.
+
+def test_base_exits_with_two_when_git_cannot_run_or_times_out(tmp_path, monkeypatch, capsys):
+    root = repository(tmp_path)
+    for failure in (subprocess.TimeoutExpired(cmd='git', timeout=120), FileNotFoundError('git')):
+        def broken(*a, failure=failure, **k):
+            raise failure
+        with monkeypatch.context() as m:
+            m.setattr(scan_repo.subprocess, 'run', broken)
+            assert scan_repo.main([str(root), '--base', 'main']) == 2
+        captured = capsys.readouterr()
+        assert captured.out == '' and 'cannot diff against main, no result issued' in captured.err
+        assert 'git failed' in captured.err
+
+
+def test_base_rename_without_edits_changes_nothing_but_a_change_with_no_line_diff_counts_as_new(tmp_path, capsys):
+    root = repository(tmp_path)
+    git(root, 'switch', '-q', 'main')
+    git(root, 'switch', '-q', '-c', 'move-only')
+    git(root, 'mv', 'src/legacy.py', 'src/moved.py')          # same content, new name
+    git(root, 'commit', '-q', '-m', 'move')
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 0   # its old P1 stays pre-existing
+    report = json.loads(capsys.readouterr().out)
+    assert report['files'] == ['src/moved.py']
+    assert [(f['path'], f['start_line'], f['rule_id'], f['priority'], f['new']) for f in report['findings']] == [
+        ('src/moved.py', 2, 'py-weak-md5', 'P1', False)]
+
+    git(root, 'switch', '-q', 'main')
+    git(root, 'switch', '-q', '-c', 'mode-only')
+    (root / 'src/legacy.py').chmod(0o755)                       # changed, but git shows no line diff
+    git(root, 'commit', '-q', '-am', 'mode')
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1   # unknown changes: every finding is new
+    report = json.loads(capsys.readouterr().out)
+    assert [(f['path'], f['priority'], f['new']) for f in report['findings']] == [('src/legacy.py', 'P1', True)]
+
+
+def test_base_exits_with_two_when_a_changed_file_is_missing_from_the_working_tree(tmp_path, capsys):
+    root = repository(tmp_path)
+    (root / 'web/app.js').unlink()                              # committed on the branch, deleted locally
+    assert scan_repo.main([str(root), '--base', 'main']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert 'changed files are missing from the working tree, no result issued: web/app.js' in captured.err
+
+
+def test_text_report_says_so_when_there_is_nothing_to_scan(tmp_path, capsys):
+    assert scan_repo.main([str(project(tmp_path, {'README.md': 'nothing to scan', 'docs/guide.md': 'eval(code)'}))]) == 0
+    out = capsys.readouterr().out
+    assert '0 Python, JavaScript and TypeScript files, 29 service-owned rules.' in out
+    assert 'No supported Python, JavaScript or TypeScript files to scan.' in out and 'Gate' not in out

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `requirements.txt` pins `semgrep==1.79.0`, as `requirements-cli.txt` already did. It used to resolve to 1.79.0 only because newer Semgrep conflicts with FastAPI.
 
+### Added
+- Tests for four command-line paths of `scan_repo.py --base`: git missing or timing out, a changed file missing from the working tree, a rename without edits (and a change with no line diff, which counts as new), and the nothing-to-scan message. The suite has 172 tests.
+
 ## [2.0.0] - 2026-11-09
 Upgrading from 1.0.0: the app reads `.env` only when `PRSEC_LOAD_DOTENV=1` (`make serve` sets it); the scanner accepts only one local rule file, so registry IDs, `auto` and URLs fail the scan; the demo and the `/docs`, `/redoc` and `/openapi.json` endpoints are removed.
 
