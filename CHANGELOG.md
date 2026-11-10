@@ -4,7 +4,7 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.1] - 2026-11-10
 ### Security
 - **`scan_repo.py --base` and the GitHub Action skipped changed files in `build`, `dist`, `vendor` and `coverage` folders,** at any depth, without saying so, so a pull request that added `app/build/handler.py` with `os.system(request.args["c"])` passed the gate. The GitHub App scans those files. A `--base` scan now scans them too and skips only the folders the scanner refuses, `node_modules` and minified `*.min.js` files; the changed files it skips are listed in the output, under `skipped_changed_files` in the JSON and in the Markdown summary. A changed file there over 1 MiB now stops the scan with exit status 2, as in the App. Full scans skip the same folders as before.
 
