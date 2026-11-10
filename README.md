@@ -24,8 +24,8 @@ git clone https://github.com/lansiquo/sast-triage.git
 python3 -m venv sast-venv
 sast-venv/bin/pip install -r sast-triage/requirements-cli.txt
 git clone https://github.com/OWASP/NodeGoat.git
-sast-venv/bin/python sast-triage/scan_repo.py NodeGoat                   # whole project
-sast-venv/bin/python sast-triage/scan_repo.py NodeGoat --base 5e71697~1  # last two PRs
+sast-venv/bin/python sast-triage/scan_repo.py NodeGoat                # whole project
+sast-venv/bin/python sast-triage/scan_repo.py NodeGoat --base HEAD~2  # last two pull requests
 ```
 
 The whole-project scan, without the closing legend and with the gate's repeat of the six P1 lines
@@ -77,17 +77,18 @@ dependencies (A9, see [sca-triage](https://github.com/lansiquo/sca-triage)), ser
 `research.js` and a ReDoS-prone regex in `profile.js`. No rule covers them, HTML templates are not scanned,
 and a request value passed to another module before it reaches a query is not traced.
 
-`--base 5e71697~1` reviews NodeGoat's last two pull requests the way the gate reviews a pull request.
-[#233](https://github.com/OWASP/NodeGoat/pull/233) moved the tutorial routes out of `app/routes/index.js`
-into a new `tutorial.js`, and #290 only edited an HTML view. The output, without the legend:
+`--base HEAD~2` reviews NodeGoat's last two pull requests the way the gate reviews a pull request:
+`HEAD~2` is the commit just before them. [#233](https://github.com/OWASP/NodeGoat/pull/233) moved the
+tutorial routes out of `app/routes/index.js` into a new `tutorial.js`, and #290 only edited an HTML view.
+The output, without the legend:
 
 ```text
-sast-triage scan of NodeGoat, changes since 5e71697~1
+sast-triage scan of NodeGoat, changes since HEAD~2
 A finding is new when it covers a line changed since the base; only a new P1 fails.
 2 changed Python, JavaScript and TypeScript files, 29 service-owned rules.
 Skipped: .git, node_modules, vendor, dist, build, coverage, .hg, .svn, .venv, venv, __pycache__ folders and minified *.min.js files.
 
-Changes since 5e71697~1 (2 files): SUCCESS
+Changes since HEAD~2 (2 files): SUCCESS
   [P2, pre-existing] app/routes/index.js:72  js-open-redirect
 ### sast-triage — Semgrep summary
 
@@ -100,9 +101,17 @@ Changes since 5e71697~1 (2 files): SUCCESS
 | P3 | 0 | 0 |
 ```
 
-The open redirect is in a file #233 changed, but not on a line it changed, so it is pre-existing. The other
-eight findings are in files neither pull request touched, so they are not scanned, and the gate passes. The
-[case study](https://dotrobin.dev/sast-triage.html) shows both runs.
+**Why this passes when the whole-project scan fails.** The gate fails only on a finding that is both new
+and P1, and these pull requests introduced none:
+
+- The open redirect is in a file #233 changed, but not on a line it changed, so it is pre-existing. It is
+  also P2, which never fails the gate.
+- The other eight findings, including all six P1s, are in files neither pull request touched, so they are
+  not scanned.
+
+The six P1s are still in the project, as the whole-project scan shows. They just aren't these pull
+requests' doing, so they don't block them. The [case study](https://dotrobin.dev/sast-triage.html) shows
+both runs.
 
 ## Use it on your project
 
