@@ -13,10 +13,26 @@ RULES = yaml.safe_load(OFFLINE_RULESET)['rules']
 PYTHON_RULES = {rule['id'] for rule in RULES if rule['languages'] == ['python']}
 JAVASCRIPT_RULES = {rule['id'] for rule in RULES if rule['languages'] == ['javascript', 'typescript']}
 
+# Request-data rules need a route around the snippet.
+FLASK_APP = 'from flask import Flask, request\napp = Flask(__name__)\n'
+EXPRESS_APP = "const express = require('express');\nconst app = express();\n"
+
 # rule: (snippets it must report, snippets that must produce no finding at all)
 PYTHON_CASES = {
-    'py-weak-md5': (['hashlib.md5(data)', 'hashlib.md5(data)  # nosemgrep'], ['hashlib.sha256(data)']),
-    'py-weak-sha1': (['hashlib.sha1(data).hexdigest()'], ['hashlib.sha512(data)']),
+    'py-weak-md5': ([
+        'import hashlib\nhashlib.md5(data)',
+        'import hashlib\nhashlib.md5(data)  # nosemgrep',
+        'import hashlib\nh = hashlib.md5()\nh.update(blob)',
+    ], [
+        'import hashlib\nhashlib.sha256(data)',
+        'import hashlib\nhashlib.md5(url.encode(), usedforsecurity=False).hexdigest()',
+    ]),
+    'py-weak-sha1': ([
+        'import hashlib\nhashlib.sha1(data).hexdigest()',
+    ], [
+        'import hashlib\nhashlib.sha512(data)',
+        'import hashlib\nhashlib.sha1(etag_source, usedforsecurity=False)',
+    ]),
     'py-unsafe-yaml-load': (['yaml.load(text)', 'yaml.load(text, Loader=yaml.Loader)'],
                             ['yaml.load(text, Loader=yaml.SafeLoader)', 'yaml.safe_load(text)']),
     'py-unsafe-yaml-unsafe-load': (['yaml.unsafe_load(text)'], ['yaml.safe_dump(data)']),
@@ -35,6 +51,75 @@ PYTHON_CASES = {
     'py-tarfile-extractall': (['tarfile.open(path).extractall(dest)',
                                'with tarfile.open(path) as archive:\n    archive.extractall(dest)'],
                               ['tarfile.open(path).getnames()']),
+    'py-sql-injection': ([
+        # Also a formatted query: the runner keeps only the more severe finding for the line.
+        FLASK_APP + "def find(cur):\n    name = request.args['name']\n    cur.execute(f\"SELECT * FROM users WHERE name = '{name}'\")",
+        FLASK_APP + 'def find(cur):\n    cur.execute("SELECT * FROM users WHERE id = " + request.args[\'id\'])',
+        FLASK_APP + 'def find(cur):\n    q = "SELECT * FROM users WHERE name = \'%s\'" % request.form.get(\'name\')\n    cur.execute(q)',
+        FLASK_APP + 'def find(db):\n    db.execute(f"DELETE FROM posts WHERE id = {request.args.get(\'id\')}")',
+        "def search(request, cursor):\n    cursor.execute('SELECT * FROM t WHERE q = ' + request.GET['q'])",
+        FLASK_APP + "def raw(User):\n    return User.objects.raw('SELECT * FROM auth_user WHERE name = ' + request.args['n'])",
+    ], [
+        FLASK_APP + "def find(cur):\n    cur.execute('SELECT * FROM users WHERE id = %s', (request.args['id'],))",
+        FLASK_APP + "def find(cur):\n    cur.execute('SELECT * FROM users WHERE id = ' + str(int(request.args['id'])))",
+        FLASK_APP + "def find(cur):\n    cur.execute('SELECT * FROM users WHERE id = ?', [request.args.get('id')])",
+    ]),
+    'py-sql-formatted-query': ([
+        'def find_user(conn, name):\n    return conn.execute("SELECT * FROM users WHERE name = \'%s\'" % name).fetchall()',
+        'def find_order(cursor, order_id):\n    cursor.execute(f"SELECT * FROM orders WHERE id = {order_id}")',
+        "def rename(cur, new, old):\n    cur.execute('UPDATE users SET name = {} WHERE name = {}'.format(new, old))",
+        "def remove(cur, ids):\n    cur.executemany('DELETE FROM t WHERE id = ' + ids, [])",
+    ], [
+        "def find(cur, user_id):\n    cur.execute('SELECT * FROM users WHERE id = %s', (user_id,))",
+        "def find(cur):\n    cur.execute('SELECT * FROM users')",
+        "def find(cur):\n    cur.execute(f'SELECT * FROM users')",
+        "def find(cur):\n    cur.execute('SELECT * FROM users ' + 'ORDER BY id')",
+        "def log(logger, name):\n    logger.info('select %s' % name)",
+    ]),
+    'py-path-traversal': ([
+        FLASK_APP + "@app.route('/file')\ndef download():\n    return open('/srv/files/' + request.args['name']).read()",
+        FLASK_APP + "import os\nfrom flask import send_file\ndef get():\n    return send_file(os.path.join('/srv/uploads', request.args.get('f')))",
+        "def view(request):\n    with open(request.GET['path']) as fh:\n        return fh.read()",
+    ], [
+        FLASK_APP + "import os\ndef download():\n    return open(os.path.join('/srv/files', os.path.basename(request.args['name']))).read()",
+        FLASK_APP + "from werkzeug.utils import secure_filename\ndef save():\n    open('/srv/up/' + secure_filename(request.files['f'].filename), 'wb')",
+        FLASK_APP + "from flask import send_from_directory\ndef get():\n    return send_from_directory('/srv/files', request.args['name'])",
+        "def read(name):\n    return open('/srv/files/' + name).read()",
+    ]),
+    'py-ssrf': ([
+        FLASK_APP + "import requests\ndef proxy():\n    return requests.get(request.args['url']).text",
+        FLASK_APP + "import urllib.request\ndef fetch():\n    url = request.form['target']\n    return urllib.request.urlopen(url).read()",
+        FLASK_APP + "import httpx\ndef hook():\n    httpx.post(request.json['callback'], json={})",
+        FLASK_APP + "import requests\ndef go():\n    requests.request('GET', request.args.get('u'))",
+    ], [
+        FLASK_APP + "import requests\ndef user():\n    return requests.get('https://api.example.com/users/' + request.args['id']).text",
+        FLASK_APP + 'import requests\ndef user():\n    return requests.get(f"https://api.example.com/users/{request.args[\'id\']}").text',
+        FLASK_APP + "import requests\ndef status():\n    return requests.get('https://status.example.com', params={'q': request.args['q']}).text",
+        'import requests\ndef fetch(url):\n    return requests.get(url).text',
+        "import requests\ndef notify(request, Webhook):\n    hook = Webhook.objects.get(pk=request.POST['id'])\n    requests.post(hook.url, json={})",
+    ]),
+    'py-xss': ([
+        FLASK_APP + "@app.route('/hello')\ndef hello():\n    return '<h1>Hello ' + request.args.get('name') + '</h1>'",
+        FLASK_APP + "@app.get('/q')\ndef q():\n    term = request.args['q']\n    return f'<p>Results for {term}</p>'",
+        FLASK_APP + "from flask import render_template_string\n@app.route('/t')\ndef t():\n    return render_template_string('Hi ' + request.args['n'])",
+        "from django.http import HttpResponse\ndef echo(request):\n    return HttpResponse('You said ' + request.GET['msg'])",
+        FLASK_APP + "from markupsafe import Markup\ndef note():\n    return Markup('<b>%s</b>' % request.form['note'])",
+    ], [
+        FLASK_APP + "from markupsafe import escape\n@app.route('/hello')\ndef hello():\n    return '<h1>Hello ' + escape(request.args.get('name')) + '</h1>'",
+        FLASK_APP + "from flask import render_template\n@app.route('/hello')\ndef hello():\n    return render_template('hello.html', name=request.args['name'])",
+        FLASK_APP + "from flask import jsonify\n@app.route('/api')\ndef api():\n    return jsonify(name=request.args['name'])",
+        FLASK_APP + "@app.route('/api')\ndef api():\n    return {'name': request.args['name']}",
+        FLASK_APP + "from flask import redirect\n@app.route('/go')\ndef go():\n    return redirect('/home?ref=' + request.args['ref'])",
+        FLASK_APP + "def helper():\n    return '<b>' + request.args['x'] + '</b>'",
+    ]),
+    'py-weak-password-hash': ([
+        'import hashlib\ndef store(password):\n    return hashlib.md5(password.encode()).hexdigest()',
+        'import hashlib\ndef sign(secret, body):\n    return hashlib.sha1(secret + body).hexdigest()',
+        'import hashlib\ndef check(user):\n    return hashlib.sha1(user.pwd_plain.encode()).digest()',
+    ], [
+        "import hashlib\ndef store(password, salt):\n    return hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 600000)",
+        'import hmac, hashlib\ndef sign(secret, body):\n    return hmac.new(secret, body, hashlib.sha1).hexdigest()',
+    ]),
 }
 
 JAVASCRIPT_CASES = {
@@ -90,6 +175,7 @@ JAVASCRIPT_CASES = {
     'js-weak-hash': ([
         "const crypto = require('crypto');\ncrypto.createHash('md5').update(data);",
         "const crypto = require('crypto');\ncrypto.createHash('SHA1');",
+        "const crypto = require('crypto');\nconst etag = crypto.createHash('md5').update(body).digest('hex');",
     ], [
         "const crypto = require('crypto');\ncrypto.createHash('sha256').update(data);",
     ]),
@@ -185,6 +271,79 @@ JAVASCRIPT_CASES = {
         'app.use(cookieParser());',
         "const { cookieSecret } = require('./config');\napp.use(session({ secret: cookieSecret }));",
     ]),
+    'js-sql-injection': ([
+        # Also a formatted query: the runner keeps only the more severe finding for the line.
+        EXPRESS_APP + "app.get('/search', (req, res) => {\n  const criteria = req.query.q;\n  db.query(`SELECT * FROM products WHERE name LIKE '%${criteria}%'`, (e, rows) => res.json(rows));\n});",
+        EXPRESS_APP + 'app.get(\'/user\', (req, res) => db.query("SELECT * FROM users WHERE id = " + req.query.id, (e, rows) => res.json(rows)));',
+        EXPRESS_APP + "app.post('/find', async (req, res) => {\n  const sql = `SELECT * FROM users WHERE name = '${req.body.name}'`;\n  const rows = await pool.query(sql);\n  res.json(rows);\n});",
+        EXPRESS_APP + "app.get('/raw', async (req, res) => res.json(await prisma.$queryRawUnsafe('SELECT * FROM t WHERE a = ' + req.params.a)));",
+        "export async function GET(request) {\n  return Response.json(await db.query('SELECT * FROM users WHERE id = ' + request.headers.get('x-user')));\n}",
+        EXPRESS_APP + "app.get('/k', async (req, res) => res.json(await knex.raw(`DELETE FROM t WHERE id = ${req.query.id}`)));",
+    ], [
+        EXPRESS_APP + "app.get('/user', (req, res) => db.query('SELECT * FROM users WHERE id = ?', [req.query.id], (e, rows) => res.json(rows)));",
+        EXPRESS_APP + "app.get('/user', (req, res) => pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]).then((r) => res.json(r.rows)));",
+        EXPRESS_APP + "app.get('/user', (req, res) => db.query('SELECT * FROM users WHERE id = ' + parseInt(req.query.id, 10), cb));",
+        EXPRESS_APP + "app.get('/gql', async (req, res) => res.json(await client.query({ query: GET_USER, variables: { id: req.query.id } })));",
+        EXPRESS_APP + "app.get('/user', (req, res) => db.query('SELECT * FROM users WHERE id = ' + connection.escape(req.query.id), cb));",
+    ]),
+    'js-sql-formatted-query': ([
+        "async function find(pool, name) {\n  return pool.query(`SELECT * FROM users WHERE name = '${name}'`);\n}",
+        "function remove(db, id, cb) {\n  db.query('DELETE FROM posts WHERE id = ' + id, cb);\n}",
+    ], [
+        "async function find(pool, name) {\n  return pool.query('SELECT * FROM users WHERE name = $1', [name]);\n}",
+        'async function all(pool) {\n  return pool.query(`SELECT * FROM users`);\n}',
+        "function find(db, cb) {\n  db.query('SELECT * FROM users ' + 'ORDER BY id', cb);\n}",
+        "const params = new URLSearchParams(location.search);\nconst q = params.get('query');",
+    ]),
+    'js-path-traversal': ([
+        EXPRESS_APP + "const fs = require('fs');\napp.get('/file', (req, res) => res.send(fs.readFileSync('/srv/files/' + req.query.name)));",
+        EXPRESS_APP + "const path = require('path');\napp.get('/dl', (req, res) => res.sendFile(path.join(__dirname, 'files', req.params.file)));",
+        EXPRESS_APP + "const fs = require('fs');\napp.get('/s', (req, res) => fs.createReadStream(req.query.p).pipe(res));",
+        EXPRESS_APP + "app.get('/d', (req, res) => res.download('/srv/files/' + req.query.f));",
+        EXPRESS_APP + "const fs = require('fs');\napp.get('/u/:id', (req, res) => User.findById(req.params.id, (err, user) => res.send(fs.readFileSync('/srv/' + req.query.p))));",
+        EXPRESS_APP + "const fs = require('fs');\napp.post('/up', (req, res) => {\n  fs.writeFileSync('uploads/' + req.file.originalname, req.file.buffer);\n  res.sendStatus(201);\n});",
+    ], [
+        EXPRESS_APP + "const fs = require('fs');\nconst path = require('path');\napp.get('/file', (req, res) => res.send(fs.readFileSync(path.join('/srv/files', path.basename(req.query.name)))));",
+        EXPRESS_APP + "app.get('/dl', (req, res) => res.sendFile(req.params.file, { root: '/srv/files' }));",
+        "const fs = require('fs');\nfunction load(name) {\n  return fs.readFileSync('/srv/files/' + name);\n}",
+        EXPRESS_APP + "app.get('/files/:file(*)', (req, res) => res.download(req.params.file, { root: '/srv/files' }));",
+        EXPRESS_APP + "const fs = require('fs');\napp.get('/avatar', (req, res) => {\n  const user = sessions.get(req.cookies.token);\n  res.send(fs.readFileSync(`avatars/${user.id}.png`));\n});",
+        EXPRESS_APP + "const fs = require('fs/promises');\nconst { fileTypeFromBuffer } = require('file-type');\napp.post('/avatar', async (req, res) => {\n  const type = await fileTypeFromBuffer(req.file.buffer);\n  await fs.writeFile(`uploads/${req.user.id}.${type.ext}`, req.file.buffer);\n  res.sendStatus(204);\n});",
+    ]),
+    'js-ssrf': ([
+        EXPRESS_APP + "const axios = require('axios');\napp.get('/fetch', async (req, res) => res.send((await axios.get(req.query.url)).data));",
+        EXPRESS_APP + "const needle = require('needle');\napp.get('/r', (req, res) => {\n  const url = req.query.url + req.query.symbol;\n  return needle.get(url, (e, r, body) => res.json(body));\n});",
+        EXPRESS_APP + "app.post('/hook', async (req, res) => {\n  await fetch(req.body.callback, { method: 'POST' });\n  res.sendStatus(204);\n});",
+        EXPRESS_APP + "const https = require('https');\napp.get('/p', (req, res) => https.get(req.query.target, (r) => r.pipe(res)));",
+    ], [
+        EXPRESS_APP + "const axios = require('axios');\napp.get('/user', async (req, res) => res.json((await axios.get('https://api.example.com/users/' + req.params.id)).data));",
+        EXPRESS_APP + "app.get('/user', async (req, res) => res.json(await (await fetch(`https://api.example.com/users/${req.query.id}`)).json()));",
+        "const axios = require('axios');\nasync function load(url) {\n  return (await axios.get(url)).data;\n}",
+        EXPRESS_APP + "app.post('/ping/:id', async (req, res) => {\n  const hook = await Webhook.findById(req.params.id);\n  await fetch(hook.url);\n  res.sendStatus(204);\n});",
+        EXPRESS_APP + "const axios = require('axios');\napp.get('/s', async (req, res) => res.json((await axios.get('https://api.example.com/search', { params: { q: req.query.q } })).data));",
+    ]),
+    'js-xss': ([
+        EXPRESS_APP + "app.get('/hello', (req, res) => res.send('<h1>Hello ' + req.query.name + '</h1>'));",
+        EXPRESS_APP + "app.get('/q', (req, res) => {\n  const term = req.query.q;\n  res.status(200).send(`<p>Results for ${term}</p>`);\n});",
+        EXPRESS_APP + "app.post('/echo', (req, res) => {\n  res.write(req.body.message);\n  res.end();\n});",
+    ], [
+        EXPRESS_APP + "const escapeHtml = require('escape-html');\napp.get('/hello', (req, res) => res.send('<h1>Hello ' + escapeHtml(req.query.name) + '</h1>'));",
+        EXPRESS_APP + "app.get('/api', (req, res) => res.json({ name: req.query.name }));",
+        EXPRESS_APP + "app.get('/api', (req, res) => res.send({ name: req.query.name }));",
+        EXPRESS_APP + "app.get('/hello', (req, res) => res.render('hello', { name: req.query.name }));",
+        EXPRESS_APP + "app.get('/n', (req, res) => res.send('Page ' + Number(req.query.page)));",
+        'function reply(ws, msg) {\n  ws.send(msg);\n}',
+        EXPRESS_APP + "const users = { 1: { name: 'tobi' } };\napp.get('/users/:id', (req, res) => res.send(users[req.params.id] || { error: 'not found' }));",
+        EXPRESS_APP + "app.get('/echo', (req, res) => res.send(req.query));",
+    ]),
+    'js-weak-password-hash': ([
+        "const crypto = require('crypto');\nconst hash = crypto.createHash('md5').update(password).digest('hex');",
+        "const crypto = require('crypto');\nfunction sign(body) {\n  return crypto.createHash('sha1').update(process.env.API_SECRET + body).digest('hex');\n}",
+        "const crypto = require('crypto');\nconst h = crypto.createHash('SHA1').update(req.body.newPassword).digest('base64');",
+    ], [
+        "const crypto = require('crypto');\nconst key = crypto.scryptSync(password, salt, 64);",
+        "const crypto = require('crypto');\nconst mac = crypto.createHmac('sha1', secret).update(body).digest('hex');",
+    ]),
 }
 
 # Every supported extension is parsed and scanned, and each language's rules stay in their language.
@@ -216,15 +375,15 @@ def scan(tmp_path, monkeypatch, sources):
 
 def test_ruleset_counts_and_metadata():
     ids = [rule['id'] for rule in RULES]
-    assert len(ids) == len(set(ids)) == 29
-    assert sum(rule['languages'] == ['python'] for rule in RULES) == 15
-    assert len(JAVASCRIPT_RULES) == 14 and all(rule.startswith('js-') for rule in JAVASCRIPT_RULES)
+    assert len(ids) == len(set(ids)) == 41
+    assert sum(rule['languages'] == ['python'] for rule in RULES) == 21
+    assert len(JAVASCRIPT_RULES) == 20 and all(rule.startswith('js-') for rule in JAVASCRIPT_RULES)
     for rule in RULES:
         assert rule['severity'] in {'ERROR', 'WARNING'} and rule['metadata']['cwe'].startswith('CWE-'), rule['id']
         if rule['id'] in JAVASCRIPT_RULES:
             assert rule['metadata']['owasp'].endswith(':2021'), rule['id']
     readme = (Path(__file__).resolve().parent.parent / 'README.md').read_text()
-    assert '29 service-owned rules' in readme
+    assert '41 service-owned rules' in readme
 
 
 def test_every_rule_has_positive_and_negative_examples(tmp_path, monkeypatch):
@@ -293,7 +452,7 @@ PULL_REQUEST = {
 }
 PULL_REQUEST_TRIAGE = {
     ('reports.py', 'py-subprocess-shell-true'): ('P1', True),                       # fails the check
-    ('reports.py', 'py-weak-md5'): ('P1', False),                                   # already there: notice
+    ('reports.py', 'py-weak-md5'): ('P2', False),                                   # medium, already there: notice
     ('reports.py', 'py-random-for-secrets'): ('P2', True),                          # medium in runtime code
     ('tests/test_reports.py', 'py-insecure-deserialization-pickle-loads'): ('P2', True),   # high in test code
     ('tests/test_reports.py', 'py-tempfile-mktemp'): ('P3', False),                 # medium in test code

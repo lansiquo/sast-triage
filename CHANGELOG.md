@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **Rules for request data reaching a dangerous call** (12 new rules, 41 in all: 21 Python, 20 JavaScript and TypeScript). Semgrep taint mode follows request data (Flask, Django and Express) within a function to SQL queries (`py-sql-injection`, `js-sql-injection`), file paths (`py-path-traversal`, `js-path-traversal`), outgoing requests (`py-ssrf`, `js-ssrf`) and HTML responses (`py-xss`, `js-xss`), all high severity. Numbers parsed from it, escaped or `basename`d values, records looked up with it, URLs with a fixed host, JSON responses and parameterized queries don't count. `py-sql-formatted-query` and `js-sql-formatted-query` (medium) flag a SQL query built by formatting any value, and `py-weak-password-hash` and `js-weak-password-hash` (high) flag md5 or sha1 applied to a password or secret. On OWASP NodeGoat the new rules add the server-side request forgery in `research.js` (7 P1 instead of 6), and on OWASP Juice Shop they find the SQL injections in `login.ts` and `search.ts` and the request forgery in the profile-image upload.
+
+### Changed
+- **Weak hashes are medium, not high.** `py-weak-md5`, `py-weak-sha1` and `js-weak-hash` are now WARNING, so an md5 cache key or ETag ranks P2 and no longer fails the gate. md5 or sha1 of a password or secret is the new high-severity rules' finding, and `hashlib.md5(..., usedforsecurity=False)` is not reported.
+- When two rules report the same flaw (same file, line and CWE), only the most severe finding is kept.
+
 ### Security
 - **A pull request could introduce a finding without failing the gate.** A finding counted as new only when one of its own lines changed, so editing the line above a call could make it dangerous while it stayed "pre-existing": changing `const cmd = 'ls -la'` to `'ls -la ' + req.query.dir` left the untouched `exec(cmd)` as `[P1, pre-existing]` and the gate passed. The base version of each changed file is now scanned too (the merge base, from git for `scan_repo.py --base` and from a second snapshot for the GitHub App), and a finding on untouched lines is pre-existing only if the base version has it, matched by rule and the text of the lines it covers. A base version that is missing, over 1 MiB or not scannable makes the file's findings new. Findings carry `new_because` and `fingerprint` in the JSON output.
 

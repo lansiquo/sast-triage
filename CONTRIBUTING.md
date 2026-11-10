@@ -22,7 +22,7 @@
 |---|---|
 | `app.py` | Webhook service and scan pipeline |
 | `analyzers/` | Semgrep runner and triage |
-| `trusted_rules.py` | The 29 service-owned rules |
+| `trusted_rules.py` | The 41 service-owned rules |
 | `scan_repo.py` | Command-line scan of a whole repository, or of what changed since a git ref (`--base`) |
 | `action.yml`, `requirements-cli.txt` | GitHub Action, and the scanner-only install it and the command line use |
 | `rules/` | Extra Semgrep rule packs for manual scans; the service does not load them |

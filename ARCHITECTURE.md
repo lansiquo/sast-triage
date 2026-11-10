@@ -34,9 +34,9 @@ flowchart TD
 | `app.py` | FastAPI app: `/webhook`, `/health`, `/ready`. Body limit, HMAC check, payload and scope validation; local scans or durable enqueue. Also the GitHub client (App JWT, narrowed installation tokens, rate-limit detection, Check Run updates in batches of 50), the tarball download and extraction, and the scan pipeline. |
 | `job_store.py` | Durable mode's SQLite queue: idempotent enqueue, claim, retry with backoff, global rate-limit cooldown, recovery, heartbeat and status. |
 | `worker.py` | Durable mode's worker: drains the queue under an exclusive file lock, runs the pipeline and decides retry or failure. |
-| `analyzers/semgrep_runner.py` | Stages only the requested files, runs Semgrep (or an explicitly selected Opengrep) on the host or in the Docker sandbox, rejects incomplete output, builds annotations and the summary. Accepts only one local, service-owned rule file. |
+| `analyzers/semgrep_runner.py` | Stages only the requested files, runs Semgrep (or an explicitly selected Opengrep) on the host or in the Docker sandbox, rejects incomplete output, keeps one finding per file, line and CWE (the most severe), builds annotations and the summary. Accepts only one local, service-owned rule file. |
 | `analyzers/triage.py` | Supported source files, diff parsing, new/pre-existing labels (changed lines, then a comparison with the base version's findings), test-code detection, P1–P3 and the gate. |
-| `trusted_rules.py` | The 29 service-owned rules: 15 Python, 14 JavaScript and TypeScript. |
+| `trusted_rules.py` | The 41 service-owned rules: 21 Python, 20 JavaScript and TypeScript. Twelve follow request data to SQL queries, file paths, outgoing requests and HTML responses (Semgrep taint mode, within one function). |
 | `scan_repo.py` | Command-line scan: every supported file outside dependency, build and VCS folders (every finding new), or with `--base REF` only the files changed since that ref, labelled from a local `git diff` with the pull request rules. Exit status 1 when the gate fails, 0 when it passes, 2 on an error. |
 | `action.yml` | GitHub Action: installs `requirements-cli.txt` with the runner's Python and runs `scan_repo.py` against the pull request's base branch. |
 | `manage_jobs.py`, `queue_maintenance.py`, `job_payload.py` | Operator tools for the durable queue (status, explicit retry, backup and restore) and its payload validators. |
@@ -85,7 +85,7 @@ flowchart TD
 
 ## Out of scope
 
-- Other languages, HTML templates, data flow across functions or files, secrets detection, dependency analysis (see [sca-triage](https://github.com/lansiquo/sca-triage)) and infrastructure code.
+- Other languages, HTML templates, data flow across functions or files (request data is followed within one function), secrets detection, dependency analysis (see [sca-triage](https://github.com/lansiquo/sca-triage)) and infrastructure code.
 - More than one repository or installation per deployment, and more than one worker per queue.
 - OS-level isolation in local mode, and executing or building repository code.
 - A completed live deployment: the host, scanner image and live GitHub acceptance checks in [deploy/README.md](deploy/README.md) are still open.

@@ -225,7 +225,23 @@ def run_semgrep(
                 continue
             findings.append(f)
 
-    return findings
+    return _most_severe_per_flaw(findings)
+
+
+def _most_severe_per_flaw(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep one finding per file, line and CWE: the most severe.
+
+    Two rules can describe the same flaw on one line, for example a SQL query that
+    is built with string formatting (a warning) and also carries request data (an
+    error). Reporting both would only repeat it at a lower priority.
+    """
+    best: Dict[Tuple[str, int, str], Dict[str, Any]] = {}
+    for f in findings:
+        if f.get("cwe"):
+            key = (f["path"], f["start_line"], f["cwe"])
+            if key not in best or _sev_order(f["severity"]) > _sev_order(best[key]["severity"]):
+                best[key] = f
+    return [f for f in findings if not f.get("cwe") or best[(f["path"], f["start_line"], f["cwe"])] is f]
 
 
 def to_github_annotations(

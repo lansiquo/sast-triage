@@ -6,7 +6,7 @@ or as a GitHub App service. It labels each finding **new** or **pre-existing** f
 what was already there.
 
 A Semgrep step in a repository's own CI reports every finding with the same urgency, and the pull request
-can edit that step. `sast-triage` runs 29 service-owned rules for high-signal patterns (`.py`, `.js`,
+can edit that step. `sast-triage` runs 41 service-owned rules for high-signal patterns (`.py`, `.js`,
 `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`). Rules, ignore files and `nosemgrep` comments from the scanned code
 are not used, and Semgrep never downloads rules. Findings are review aids, not a security audit. Its SCA
 companion, [sca-triage](https://github.com/lansiquo/sca-triage), ranks npm dependency vulnerabilities
@@ -28,13 +28,13 @@ sast-venv/bin/python sast-triage/scan_repo.py NodeGoat                # whole pr
 sast-venv/bin/python sast-triage/scan_repo.py NodeGoat --base HEAD~2  # last two pull requests
 ```
 
-The whole-project scan, without the closing legend and with the gate's repeat of the six P1 lines
+The whole-project scan, without the closing legend and with the gate's repeat of the seven P1 lines
 shortened:
 
 ```text
 sast-triage full scan of NodeGoat
 Full scan: every finding counts as new (there is no diff).
-44 Python, JavaScript and TypeScript files, 29 service-owned rules.
+44 Python, JavaScript and TypeScript files, 41 service-owned rules.
 Skipped: .git, node_modules, vendor, dist, build, coverage, .hg, .svn, .venv, venv, __pycache__ folders and minified *.min.js files.
 
 Full scan (44 files): FAILURE
@@ -43,18 +43,19 @@ Full scan (44 files): FAILURE
   [P1, new] app/routes/contributions.js:32  js-dangerous-eval
   [P1, new] app/routes/contributions.js:33  js-dangerous-eval
   [P1, new] app/routes/contributions.js:34  js-dangerous-eval
+  [P1, new] app/routes/research.js:16  js-ssrf
   [P1, new] config/env/all.js:8  js-hardcoded-session-secret
   [P2, new] app/routes/index.js:72  js-open-redirect
   [P2, new] server.js:78  js-cookie-without-secure
   [P2, new] server.js:137  js-template-autoescape-disabled
 ### sast-triage — Semgrep summary
 
-**Gate: FAIL** — 6 new P1 findings:
-- … (the six P1 findings above)
+**Gate: FAIL** — 7 new P1 findings:
+- … (the seven P1 findings above)
 
 | Priority | New | Pre-existing |
 |---|---|---|
-| P1 | 6 | 0 |
+| P1 | 7 | 0 |
 | P2 | 3 | 0 |
 | P3 | 0 | 0 |
 ```
@@ -67,15 +68,17 @@ Full scan (44 files): FAILURE
   and `server.js` configures `express-session` without `cookie.secure`.
 - **Cross-site scripting (A3):** `server.js` turns off Swig's autoescaping for every template.
 - **Open redirect (A10):** `/learn` redirects to `req.query.url`.
+- **Server-side request forgery:** `research.js` fetches a URL built from the `url` and `symbol` query
+  parameters.
 
 `Gruntfile.js:165` is not one of the lessons: the `db-reset` build task runs a shell command built from
 `NODE_ENV` and a task argument. It is a real injection sink, but only whoever runs Grunt controls it.
 
 **Missed:** log injection (A1), plain-text passwords (A2), insecure direct object references (A4), missing
 security headers (A5), plain HTTP (A6), missing access control on `/benefits` (A7), CSRF (A8), vulnerable
-dependencies (A9, see [sca-triage](https://github.com/lansiquo/sca-triage)), server-side request forgery in
-`research.js` and a ReDoS-prone regex in `profile.js`. No rule covers them, HTML templates are not scanned,
-and a request value passed to another module before it reaches a query is not traced.
+dependencies (A9, see [sca-triage](https://github.com/lansiquo/sca-triage)) and a ReDoS-prone regex in
+`profile.js`. No rule covers them, HTML templates are not scanned, and a request value passed to another
+module before it reaches a query is not traced.
 
 `--base HEAD~2` reviews NodeGoat's last two pull requests the way the gate reviews a pull request:
 `HEAD~2` is the commit just before them. [#233](https://github.com/OWASP/NodeGoat/pull/233) moved the
@@ -85,7 +88,7 @@ The output, without the legend:
 ```text
 sast-triage scan of NodeGoat, changes since HEAD~2
 A finding is new when it covers a line changed since the base, or was not in the file before; only a new P1 fails.
-2 changed Python, JavaScript and TypeScript files, 29 service-owned rules.
+2 changed Python, JavaScript and TypeScript files, 41 service-owned rules.
 Skipped: .git, node_modules, vendor, dist, build, coverage, .hg, .svn, .venv, venv, __pycache__ folders and minified *.min.js files.
 
 Changes since HEAD~2 (2 files): SUCCESS
@@ -106,10 +109,10 @@ and P1, and these pull requests introduced none:
 
 - The open redirect is in a file #233 changed, but not on a line it changed, so it is pre-existing. It is
   also P2, which never fails the gate.
-- The other eight findings, including all six P1s, are in files neither pull request touched, so they are
+- The other nine findings, including all seven P1s, are in files neither pull request touched, so they are
   not scanned.
 
-The six P1s are still in the project, as the whole-project scan shows. They just aren't these pull
+The seven P1s are still in the project, as the whole-project scan shows. They just aren't these pull
 requests' doing, so they don't block them. The [case study](https://dotrobin.dev/sast-triage.html) shows
 both runs.
 
@@ -189,13 +192,39 @@ only a complete scan can pass.
 
 ## Rules
 
-`trusted_rules.py` holds all 29 service-owned rules. Rule severity ERROR is high and WARNING is medium.
+`trusted_rules.py` holds all 41 service-owned rules. Rule severity ERROR is high and WARNING is medium.
 
-**Python (15):** `hashlib.md5` and `sha1`; `yaml.load` without a safe loader, `yaml.unsafe_load`,
-`pickle.load` and `pickle.loads`; `os.system`, `os.popen` and `subprocess` with `shell=True`; `eval` and
-`exec`; `requests` with `verify=False`; the `random` module; `tempfile.mktemp`; `tarfile.extractall`.
+**Request data reaching a dangerous call** (12 rules, Semgrep taint mode). They follow data from the
+request (Flask and Django `request.args`, `form`, `json`, `GET`, `POST`, cookies and headers; Express
+`req.query`, `body`, `params`, cookies and headers) through assignments, concatenation, formatting and
+calls such as `os.path.join` and `path.join`, within one function:
 
-**JavaScript and TypeScript (14):**
+| Rule | Severity | CWE | Flags request data reaching |
+|---|---|---|---|
+| `py-sql-injection`, `js-sql-injection` | high | 89 | a SQL query: `execute`, `executemany`, Django `raw`; `query`, `execute`, `knex.raw`, Prisma `$queryRawUnsafe` |
+| `py-path-traversal`, `js-path-traversal` | high | 22 | a file path: `open`, Flask `send_file`, `fs.readFile`, `createReadStream`, `writeFile` and others, `res.sendFile` and `res.download` without a `root` |
+| `py-ssrf`, `js-ssrf` | high | 918 | the URL of an outgoing request: `requests`, `httpx`, `urlopen`, `fetch`, `axios`, `got`, `needle`, `http(s).get` |
+| `py-xss`, `js-xss` | high | 79 | an HTML response: a Flask route's return value, `make_response`, `Markup`, `render_template_string`, Django `HttpResponse`, `res.send`, `res.write`, `res.end` |
+
+A number parsed from request data (`int`, `parseInt`), a value passed through an escaping or path
+function (`escape`, `secure_filename`, `path.basename`) and a record looked up with it
+(`User.objects.get(...)`, `User.findById(...)`) no longer count as request data. A URL that starts with a
+fixed `https://host/` can't be pointed at another server, and an object sent with `res.send` goes out as
+JSON. A query that only has request data in its parameters is fine. For cross-site scripting, data only
+counts when it is copied, concatenated or formatted into the response, not passed through a call: a
+file's contents or an API's response is not request data.
+
+`py-sql-formatted-query` and `js-sql-formatted-query` (medium, CWE-89) flag a SQL query built with `%`,
+`format`, an f-string, `+` or a template literal from any value. When the same line also carries request
+data, only the high-severity finding is reported. `py-weak-password-hash` and `js-weak-password-hash`
+(high, CWE-916) flag md5 or sha1 applied to something named like a password, passphrase or secret.
+
+**Python (15 more):** `hashlib.md5` and `sha1` (medium; not with `usedforsecurity=False`); `yaml.load`
+without a safe loader, `yaml.unsafe_load`, `pickle.load` and `pickle.loads`; `os.system`, `os.popen` and
+`subprocess` with `shell=True`; `eval` and `exec`; `requests` with `verify=False`; the `random` module;
+`tempfile.mktemp`; `tarfile.extractall`.
+
+**JavaScript and TypeScript (14 more):**
 
 | Rule | Severity | CWE | Flags |
 |---|---|---|---|
@@ -204,7 +233,7 @@ only a complete scan can pass.
 | `js-vm-dynamic-code` | high | 95 | `vm.runInContext`, `runInNewContext`, `runInThisContext`, `compileFunction` or `new vm.Script` with non-literal code |
 | `js-child-process-exec` | high | 78 | `child_process` `exec` or `execSync` with a non-literal command |
 | `js-insecure-deserialization-node-serialize` | high | 502 | `node-serialize` `unserialize()` |
-| `js-weak-hash` | high | 327 | `createHash('md5')` or `createHash('sha1')` |
+| `js-weak-hash` | medium | 327 | `createHash('md5')` or `createHash('sha1')` |
 | `js-math-random-for-secrets` | medium | 338 | `Math.random()` stored as a token, secret, password, salt, nonce, OTP or similar |
 | `js-tls-verification-disabled` | high | 295 | `rejectUnauthorized: false`, `NODE_TLS_REJECT_UNAUTHORIZED = '0'` |
 | `js-cookie-without-httponly` | medium | 1004 | `httpOnly: false` |

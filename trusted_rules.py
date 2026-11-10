@@ -4,18 +4,34 @@ rules:
   # Crypto: weak hashes
   - id: py-weak-md5
     message: Use of weak hash (md5)
-    severity: ERROR
+    severity: WARNING
     languages: [python]
-    pattern: hashlib.md5(...)
+    pattern-either:
+      - pattern: hashlib.md5()
+      - patterns:
+          - pattern: hashlib.md5($DATA, ...)
+          # Not for security (a cache key, say), or a password: py-weak-password-hash.
+          - pattern-not: hashlib.md5(..., usedforsecurity=False, ...)
+          - metavariable-regex:
+              metavariable: $DATA
+              regex: (?is)^(?!.*(passw|pwd|passphrase|secret))
     metadata:
       cwe: CWE-327
       owasp: A02:2021
 
   - id: py-weak-sha1
     message: Use of weak hash (sha1)
-    severity: ERROR
+    severity: WARNING
     languages: [python]
-    pattern: hashlib.sha1(...)
+    pattern-either:
+      - pattern: hashlib.sha1()
+      - patterns:
+          - pattern: hashlib.sha1($DATA, ...)
+          # Not for security (a cache key, say), or a password: py-weak-password-hash.
+          - pattern-not: hashlib.sha1(..., usedforsecurity=False, ...)
+          - metavariable-regex:
+              metavariable: $DATA
+              regex: (?is)^(?!.*(passw|pwd|passphrase|secret))
     metadata:
       cwe: CWE-327
       owasp: A02:2021
@@ -160,6 +176,256 @@ rules:
     metadata:
       cwe: CWE-22
 
+
+  # Request data reaching a dangerous call (taint mode: followed within one file).
+  # Only data from the request itself: a value looked up with it, or a number parsed from it, is not.
+  - id: py-sql-injection
+    message: SQL query built from request data (SQL injection); pass values as query parameters
+    severity: ERROR
+    languages: [python]
+    mode: taint
+    pattern-sources: &py-request
+      - patterns:
+          - pattern-either:
+              - pattern: request.$ATTR
+              - pattern: flask.request.$ATTR
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(args|form|values|json|cookies|headers|data|files|view_args|get_json|get_data|GET|POST|COOKIES|body|META)$
+    pattern-sinks:
+      - patterns:
+          - pattern: $DB.$METHOD($QUERY, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(execute|executemany|executescript|raw|exec_driver_sql)$
+          - focus-metavariable: $QUERY
+      - patterns:
+          - pattern-either:
+              - pattern: text($QUERY, ...)
+              - pattern: sqlalchemy.text($QUERY, ...)
+          - focus-metavariable: $QUERY
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: int(...)
+          - pattern: float(...)
+      # A record looked up with request data (User.objects.get(pk=...)) is stored data, not the request's.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $MODEL.objects.$LOOKUP(...)
+                      - pattern: $MODEL.query.$LOOKUP(...)
+                  - metavariable-regex:
+                      metavariable: $LOOKUP
+                      regex: ^(get|get_or_404|first_or_404|filter|filter_by|first|get_or_create)$
+              - pattern: get_object_or_404(...)
+              - pattern: $DB.session.get(...)
+        exact: true
+    metadata:
+      cwe: CWE-89
+      owasp: A03:2021
+
+  - id: py-sql-formatted-query
+    message: SQL query built with string formatting; pass values as query parameters
+    severity: WARNING
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: $DB.$METHOD("$SQL" % $X, ...)
+                  - pattern: $DB.$METHOD("$SQL".format(...), ...)
+                  - pattern: $DB.$METHOD("$SQL" + $X, ...)
+              - metavariable-regex:
+                  metavariable: $SQL
+                  regex: (?is).*\b(select|insert|update|delete|replace)\b
+              - pattern-not: $DB.$METHOD("..." + "...", ...)
+          - patterns:
+              - pattern: $DB.$METHOD($QUERY, ...)
+              - metavariable-pattern:
+                  metavariable: $QUERY
+                  pattern: f"..."
+              - metavariable-regex:
+                  metavariable: $QUERY
+                  regex: (?is).*\b(select|insert|update|delete|replace)\b.*\{
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(execute|executemany|executescript|raw|exec_driver_sql)$
+      # Request data in the query is py-sql-injection's finding.
+      - pattern-not: $DB.$METHOD(<... request.$ATTR ...>, ...)
+    metadata:
+      cwe: CWE-89
+      owasp: A03:2021
+
+  - id: py-path-traversal
+    message: File path built from request data (path traversal); use os.path.basename or werkzeug's secure_filename
+    severity: ERROR
+    languages: [python]
+    mode: taint
+    pattern-sources: *py-request
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: open($PATH, ...)
+              - pattern: io.open($PATH, ...)
+              - pattern: codecs.open($PATH, ...)
+              - pattern: send_file($PATH, ...)
+              - pattern: flask.send_file($PATH, ...)
+          - focus-metavariable: $PATH
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: os.path.basename(...)
+          - pattern: secure_filename(...)
+          - pattern: werkzeug.utils.secure_filename(...)
+          - pattern: int(...)
+      # A record looked up with request data (User.objects.get(pk=...)) is stored data, not the request's.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $MODEL.objects.$LOOKUP(...)
+                      - pattern: $MODEL.query.$LOOKUP(...)
+                  - metavariable-regex:
+                      metavariable: $LOOKUP
+                      regex: ^(get|get_or_404|first_or_404|filter|filter_by|first|get_or_create)$
+              - pattern: get_object_or_404(...)
+              - pattern: $DB.session.get(...)
+        exact: true
+    metadata:
+      cwe: CWE-22
+      owasp: A01:2021
+
+  - id: py-ssrf
+    message: Outgoing request to a URL taken from request data (server-side request forgery)
+    severity: ERROR
+    languages: [python]
+    mode: taint
+    pattern-sources: *py-request
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: requests.$METHOD($URL, ...)
+                      - pattern: httpx.$METHOD($URL, ...)
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(get|post|put|patch|delete|head|options)$
+              - pattern: requests.request($M, $URL, ...)
+              - pattern: httpx.request($M, $URL, ...)
+              - pattern: urllib.request.urlopen($URL, ...)
+              - pattern: urlopen($URL, ...)
+          - focus-metavariable: $URL
+    pattern-sanitizers:
+      # A URL that starts with a fixed scheme and host can't be pointed at another server.
+      - patterns:
+          - pattern: $URL
+          - metavariable-pattern:
+              metavariable: $URL
+              pattern-either:
+                - pattern: $A + $B
+                - pattern: $A % $B
+                - pattern: $A.format(...)
+                - pattern: f"..."
+          - metavariable-regex:
+              metavariable: $URL
+              regex: ^[rbu]*f?[rbu]*["']https?://[^/"'{}%]+/
+      # A record looked up with request data (User.objects.get(pk=...)) is stored data, not the request's.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $MODEL.objects.$LOOKUP(...)
+                      - pattern: $MODEL.query.$LOOKUP(...)
+                  - metavariable-regex:
+                      metavariable: $LOOKUP
+                      regex: ^(get|get_or_404|first_or_404|filter|filter_by|first|get_or_create)$
+              - pattern: get_object_or_404(...)
+              - pattern: $DB.session.get(...)
+        exact: true
+    metadata:
+      cwe: CWE-918
+      owasp: A10:2021
+
+  - id: py-xss
+    message: Request data written into an HTML response or template (cross-site scripting); escape it or use an autoescaped template
+    severity: ERROR
+    languages: [python]
+    mode: taint
+    # Only data copied, concatenated or formatted into the response: what a call returns
+    # (a file's contents, a query's rows) is not the request data itself.
+    options:
+      taint_assume_safe_functions: true
+      taint_assume_safe_indexes: true
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: request.$ATTR
+              - pattern: flask.request.$ATTR
+              - pattern: request.$ATTR.get(...)
+              - pattern: request.$ATTR.getlist(...)
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(args|form|values|json|cookies|headers|data|files|view_args|GET|POST|COOKIES|body|META)$
+      - pattern: request.get_json(...)
+      - pattern: request.get_data(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete)$
+          - pattern: return $BODY
+          # A dict or list is sent as JSON.
+          - pattern-not: return {...}
+          - pattern-not: return [...]
+          - focus-metavariable: $BODY
+      - patterns:
+          - pattern-either:
+              - pattern: make_response($BODY, ...)
+              - pattern: flask.make_response($BODY, ...)
+              - pattern: HttpResponse($BODY, ...)
+              - pattern: Markup($BODY, ...)
+              - pattern: markupsafe.Markup($BODY, ...)
+              - pattern: render_template_string($BODY, ...)
+              - pattern: flask.render_template_string($BODY, ...)
+          - focus-metavariable: $BODY
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: escape(...)
+          - pattern: html.escape(...)
+          - pattern: markupsafe.escape(...)
+          - pattern: flask.escape(...)
+          - pattern: jsonify(...)
+          - pattern: flask.jsonify(...)
+          - pattern: render_template(...)
+          - pattern: flask.render_template(...)
+          - pattern: redirect(...)
+          - pattern: url_for(...)
+          - pattern: int(...)
+          - pattern: float(...)
+    metadata:
+      cwe: CWE-79
+      owasp: A03:2021
+
+  - id: py-weak-password-hash
+    message: Password or secret hashed with md5 or sha1; use a password hash (bcrypt, scrypt, argon2) or HMAC-SHA256
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5($DATA, ...)
+          - pattern: hashlib.sha1($DATA, ...)
+      - metavariable-regex:
+          metavariable: $DATA
+          regex: (?is).*(passw|pwd|passphrase|secret)
+    metadata:
+      cwe: CWE-916
+      owasp: A02:2021
+
   # JavaScript / TypeScript: code injection
   - id: js-dangerous-eval
     message: eval() runs code built at runtime (possible code injection)
@@ -302,10 +568,19 @@ rules:
   # JavaScript / TypeScript: crypto and randomness
   - id: js-weak-hash
     message: Use of weak hash (md5 or sha1)
-    severity: ERROR
+    severity: WARNING
     languages: [javascript, typescript]
     patterns:
-      - pattern: $CRYPTO.createHash($ALG, ...)
+      - pattern-either:
+          - patterns:
+              - pattern: $CRYPTO.createHash($ALG, ...)
+              - pattern-not-inside: $CRYPTO.createHash($ALG, ...).update(...)
+          # A password or secret is js-weak-password-hash's finding.
+          - patterns:
+              - pattern: $CRYPTO.createHash($ALG, ...).update($DATA, ...)
+              - metavariable-regex:
+                  metavariable: $DATA
+                  regex: (?is)^(?!.*(passw|pwd|passphrase|secret))
       - metavariable-regex:
           metavariable: $ALG
           regex: (?i)^['"`](rsa-)?(md5|sha1)['"`]$
@@ -516,4 +791,276 @@ rules:
     metadata:
       cwe: CWE-798
       owasp: A07:2021
+
+  # JavaScript / TypeScript: request data reaching a dangerous call (taint mode, within one file)
+  - id: js-sql-injection
+    message: SQL query built from request data (SQL injection); pass values as query parameters
+    severity: ERROR
+    languages: [javascript, typescript]
+    mode: taint
+    pattern-sources: &js-request
+      - patterns:
+          - pattern: $REQ.$ATTR
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(req|request)$
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(query|body|params|cookies|signedCookies|headers|files)$
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.param(...)
+              - pattern: $REQ.file.originalname
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(req|request)$
+    pattern-sinks:
+      - patterns:
+          - pattern: $DB.$METHOD($QUERY, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^\$?(query|execute|raw|queryRaw|queryRawUnsafe|executeRawUnsafe|unsafe)$
+          # An options object (an ORM or GraphQL client) is not a query string.
+          - pattern-not: $DB.$METHOD({...}, ...)
+          - focus-metavariable: $QUERY
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: parseInt(...)
+          - pattern: parseFloat(...)
+          - pattern: Number(...)
+          - pattern: $X.escape(...)
+      # A record looked up with request data (User.findById(req.params.id)) is stored data, not the request's.
+      # Only the call's result: a callback passed to it still sees the request.
+      - patterns:
+          - pattern-either:
+              - pattern: $STORE.get($KEY)
+              - patterns:
+                  - pattern: $STORE.$LOOKUP(...)
+                  - metavariable-regex:
+                      metavariable: $LOOKUP
+                      regex: ^(find|findOne|findById|findByPk|findAll|findUnique|findFirst)$
+          - pattern-not: $REQ.headers.get(...)
+          - pattern-not: $URL.searchParams.get(...)
+          # HTTP clients' get() sends a request; it doesn't look anything up.
+          - pattern-not: axios.get(...)
+          - pattern-not: got.get(...)
+          - pattern-not: needle.get(...)
+          - pattern-not: superagent.get(...)
+          - pattern-not: request.get(...)
+          - pattern-not: http.get(...)
+          - pattern-not: https.get(...)
+        exact: true
+    metadata:
+      cwe: CWE-89
+      owasp: A03:2021
+
+  - id: js-sql-formatted-query
+    message: SQL query built by concatenation or a template literal; pass values as query parameters
+    severity: WARNING
+    languages: [javascript, typescript]
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $DB.$METHOD("$SQL" + $X, ...)
+              - metavariable-regex:
+                  metavariable: $SQL
+                  regex: (?is).*\b(select|insert|update|delete|replace)\b
+              - pattern-not: $DB.$METHOD("..." + "...", ...)
+          - patterns:
+              - pattern: $DB.$METHOD($QUERY, ...)
+              - metavariable-regex:
+                  metavariable: $QUERY
+                  regex: (?is)^`.*\b(select|insert|update|delete|replace)\b.*\$\{
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^\$?(query|execute|raw|queryRaw|queryRawUnsafe|executeRawUnsafe|unsafe)$
+      # Request data in the query is js-sql-injection's finding.
+      - pattern-not: $DB.$METHOD(<... req.$ATTR ...>, ...)
+      - pattern-not: $DB.$METHOD(<... request.$ATTR ...>, ...)
+    metadata:
+      cwe: CWE-89
+      owasp: A03:2021
+
+  - id: js-path-traversal
+    message: File path built from request data (path traversal); use path.basename or a root directory that rejects ".."
+    severity: ERROR
+    languages: [javascript, typescript]
+    mode: taint
+    pattern-sources: *js-request
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: $FS.$METHOD($PATH, ...)
+                  - metavariable-regex:
+                      metavariable: $FS
+                      regex: ^(fs|fsp|fsPromises|fse|fs\.promises)$
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(readFile|readFileSync|createReadStream|writeFile|writeFileSync|createWriteStream|appendFile|appendFileSync|unlink|unlinkSync|rm|rmSync|readdir|readdirSync|open|openSync)$
+              - patterns:
+                  - pattern-either:
+                      - pattern: $RES.sendFile($PATH, ...)
+                      - pattern: $RES.download($PATH, ...)
+                  # With a root directory, Express rejects paths that leave it.
+                  - pattern-not: '$RES.sendFile($PATH, {..., root: $ROOT, ...}, ...)'
+                  - pattern-not: '$RES.download($PATH, {..., root: $ROOT, ...}, ...)'
+          - focus-metavariable: $PATH
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: path.basename(...)
+          - pattern: parseInt(...)
+          - pattern: Number(...)
+      # A record looked up with request data (User.findById(req.params.id)) is stored data, not the request's.
+      # Only the call's result: a callback passed to it still sees the request.
+      - patterns:
+          - pattern-either:
+              - pattern: $STORE.get($KEY)
+              - patterns:
+                  - pattern: $STORE.$LOOKUP(...)
+                  - metavariable-regex:
+                      metavariable: $LOOKUP
+                      regex: ^(find|findOne|findById|findByPk|findAll|findUnique|findFirst)$
+          - pattern-not: $REQ.headers.get(...)
+          - pattern-not: $URL.searchParams.get(...)
+          # HTTP clients' get() sends a request; it doesn't look anything up.
+          - pattern-not: axios.get(...)
+          - pattern-not: got.get(...)
+          - pattern-not: needle.get(...)
+          - pattern-not: superagent.get(...)
+          - pattern-not: request.get(...)
+          - pattern-not: http.get(...)
+          - pattern-not: https.get(...)
+        exact: true
+    metadata:
+      cwe: CWE-22
+      owasp: A01:2021
+
+  - id: js-ssrf
+    message: Outgoing request to a URL taken from request data (server-side request forgery)
+    severity: ERROR
+    languages: [javascript, typescript]
+    mode: taint
+    pattern-sources: *js-request
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fetch($URL, ...)
+              - pattern: axios($URL, ...)
+              - pattern: got($URL, ...)
+              - pattern: request($URL, ...)
+              - pattern: needle($M, $URL, ...)
+              - pattern: needle.request($M, $URL, ...)
+              - patterns:
+                  - pattern: $CLIENT.$METHOD($URL, ...)
+                  - metavariable-regex:
+                      metavariable: $CLIENT
+                      regex: ^(axios|got|needle|request|superagent|http|https)$
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(get|post|put|patch|delete|head|options|request)$
+                  - pattern-not: needle.request(...)
+          - focus-metavariable: $URL
+    pattern-sanitizers:
+      # A URL that starts with a fixed scheme and host can't be pointed at another server.
+      - patterns:
+          - pattern: $URL
+          - metavariable-regex:
+              metavariable: $URL
+              regex: ^['"`]https?://[^/'"`$]+/
+      # A record looked up with request data (User.findById(req.params.id)) is stored data, not the request's.
+      # Only the call's result: a callback passed to it still sees the request.
+      - patterns:
+          - pattern-either:
+              - pattern: $STORE.get($KEY)
+              - patterns:
+                  - pattern: $STORE.$LOOKUP(...)
+                  - metavariable-regex:
+                      metavariable: $LOOKUP
+                      regex: ^(find|findOne|findById|findByPk|findAll|findUnique|findFirst)$
+          - pattern-not: $REQ.headers.get(...)
+          - pattern-not: $URL.searchParams.get(...)
+          # HTTP clients' get() sends a request; it doesn't look anything up.
+          - pattern-not: axios.get(...)
+          - pattern-not: got.get(...)
+          - pattern-not: needle.get(...)
+          - pattern-not: superagent.get(...)
+          - pattern-not: request.get(...)
+          - pattern-not: http.get(...)
+          - pattern-not: https.get(...)
+        exact: true
+    metadata:
+      cwe: CWE-918
+      owasp: A10:2021
+
+  - id: js-xss
+    message: Request data written into an HTML response (cross-site scripting); escape it or render an autoescaped template
+    severity: ERROR
+    languages: [javascript, typescript]
+    mode: taint
+    # Only data copied, concatenated or formatted into the response: what a call returns
+    # (a file's contents, an API response) is not the request data itself.
+    options:
+      taint_assume_safe_functions: true
+      taint_assume_safe_indexes: true
+    pattern-sources:
+      - patterns:
+          - pattern: $REQ.$ATTR
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(req|request)$
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(query|body|params|cookies|signedCookies|headers)$
+      - patterns:
+          - pattern: $REQ.param(...)
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(req|request)$
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.send($BODY)
+              - pattern: $RES.write($BODY, ...)
+              - pattern: $RES.end($BODY, ...)
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|response)(\.status\(.*\))?$
+          # An object or array is sent as JSON, and so is a whole request object (req.query).
+          - pattern-not: $RES.send({...})
+          - pattern-not: $RES.send([...])
+          - pattern-not: $RES.send(req.$ATTR)
+          - pattern-not: $RES.send(request.$ATTR)
+          - focus-metavariable: $BODY
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: escape(...)
+          - pattern: escapeHtml(...)
+          - pattern: $LIB.escape(...)
+          - pattern: he.encode(...)
+          - pattern: xss(...)
+          - pattern: DOMPurify.sanitize(...)
+          - pattern: sanitizeHtml(...)
+          - pattern: encodeURIComponent(...)
+          - pattern: parseInt(...)
+          - pattern: Number(...)
+    metadata:
+      cwe: CWE-79
+      owasp: A03:2021
+
+  - id: js-weak-password-hash
+    message: Password or secret hashed with md5 or sha1; use a password hash (bcrypt, scrypt, argon2) or HMAC-SHA256
+    severity: ERROR
+    languages: [javascript, typescript]
+    patterns:
+      - pattern: $CRYPTO.createHash($ALG, ...).update($DATA, ...)
+      - metavariable-regex:
+          metavariable: $ALG
+          regex: (?i)^['"`](rsa-)?(md5|sha1)['"`]$
+      - metavariable-regex:
+          metavariable: $DATA
+          regex: (?is).*(passw|pwd|passphrase|secret)
+    metadata:
+      cwe: CWE-916
+      owasp: A02:2021
 """

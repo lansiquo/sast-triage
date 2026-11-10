@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PROJECT = {
     'server.js': "require('fs').writeFileSync('EXECUTED', '');\nconst total = eval(req.body.preTax);",
     'routes/redirect.ts': 'export const go = (req, res) => res.redirect(req.query.url);',
-    'tools/report.py': "open('EXECUTED', 'w')\nimport hashlib\nhashlib.md5(b'x')",
+    'tools/report.py': "open('EXECUTED', 'w')\nimport os\nos.popen('ls')",
     'test/routes.test.js': 'eval(fixture);',          # high severity in test code: P2
     'src/ok.mjs': 'export const add = (a, b) => a + b;',
     # Never listed or scanned.
@@ -50,10 +50,10 @@ def test_json_lists_every_source_file_outside_excluded_folders_and_triages_them_
     assert scan_repo.main([str(root), '--json']) == 1
     report = json.loads(capsys.readouterr().out)
     assert report['files'] == SCANNED and report['files_scanned'] == 5
-    assert report['conclusion'] == 'failure' and report['rules'] == 29
+    assert report['conclusion'] == 'failure' and report['rules'] == 41
     assert [(f['priority'], f['new'], f['path'], f['start_line'], f['rule_id']) for f in report['findings']] == [
         ('P1', True, 'server.js', 2, 'js-dangerous-eval'),
-        ('P1', True, 'tools/report.py', 3, 'py-weak-md5'),
+        ('P1', True, 'tools/report.py', 3, 'py-os-popen'),
         ('P2', True, 'routes/redirect.ts', 1, 'js-open-redirect'),
         ('P2', True, 'test/routes.test.js', 1, 'js-dangerous-eval'),
     ]
@@ -66,7 +66,7 @@ def test_text_report_matches_the_pull_request_summary(tmp_path, capsys):
     assert scan_repo.main([str(project(tmp_path))]) == 1
     out = capsys.readouterr().out
     assert 'Full scan: every finding counts as new (there is no diff).' in out
-    assert '5 Python, JavaScript and TypeScript files, 29 service-owned rules.' in out
+    assert '5 Python, JavaScript and TypeScript files, 41 service-owned rules.' in out
     assert 'Full scan (5 files): FAILURE' in out
     assert '  [P1, new] server.js:2  js-dangerous-eval' in out
     assert '  [P2, new] test/routes.test.js:1  js-dangerous-eval' in out
@@ -116,7 +116,7 @@ def test_command_line_on_the_make_check_fixture():
     result = subprocess.run([sys.executable, 'scan_repo.py', 'tests/fixtures/project'], cwd=ROOT,
                             capture_output=True, text=True, timeout=300)
     assert result.returncode == 1, result.stderr
-    assert '3 Python, JavaScript and TypeScript files, 29 service-owned rules.' in result.stdout
+    assert '3 Python, JavaScript and TypeScript files, 41 service-owned rules.' in result.stdout
     assert '  [P1, new] server.js:2  js-dangerous-eval\n  [P2, new] __tests__/server.test.js:2  js-dangerous-eval\n' \
         in result.stdout
 
@@ -132,7 +132,7 @@ def git(root, *args):
 def repository(tmp_path):
     """A base commit on main, then a feature branch that edits, adds and moves files."""
     project(tmp_path, {
-        'src/legacy.py': "import hashlib\nhashlib.md5(b'old')",                 # pre-existing P1, file edited
+        'src/legacy.py': "import os\nos.popen('ls')",                          # pre-existing P1, file edited
         'src/untouched.py': "import hashlib\nhashlib.md5(b'old')",              # never scanned
         'tests/test_cache.py': "import pickle\npickle.loads(b'')",             # moved into runtime code
         'web/app.js': 'const n = 1;',
@@ -141,7 +141,7 @@ def repository(tmp_path):
     git(tmp_path, 'add', '.')
     git(tmp_path, 'commit', '-q', '-m', 'base')
     git(tmp_path, 'switch', '-q', '-c', 'feature')
-    project(tmp_path, {'src/legacy.py': "import hashlib\nhashlib.md5(b'old')\nimport os\nos.system(cmd)",
+    project(tmp_path, {'src/legacy.py': "import os\nos.popen('ls')\n\nos.system(cmd)",
                        'web/app.js': 'const n = 1;\nconst total = eval(req.body.preTax);',
                        'docs/notes.md': 'eval(code)'})
     git(tmp_path, 'mv', 'tests/test_cache.py', 'src/cache.py')
@@ -158,7 +158,7 @@ def test_base_scans_only_changed_files_and_labels_findings_like_a_pull_request(t
     found = {(f['path'], f['start_line'], f['rule_id']): (f['priority'], f['new']) for f in report['findings']}
     assert found == {
         ('src/legacy.py', 4, 'py-os-system'): ('P1', True),
-        ('src/legacy.py', 2, 'py-weak-md5'): ('P1', False),               # untouched line: pre-existing
+        ('src/legacy.py', 2, 'py-os-popen'): ('P1', False),               # untouched line: pre-existing
         ('web/app.js', 2, 'js-dangerous-eval'): ('P1', True),
         ('src/cache.py', 2, 'py-insecure-deserialization-pickle-loads'): ('P1', True),   # test -> runtime
     }
@@ -168,11 +168,11 @@ def test_base_passes_when_only_pre_existing_findings_remain(tmp_path, capsys):
     root = repository(tmp_path)
     git(root, 'switch', '-q', 'main')
     git(root, 'switch', '-q', '-c', 'docs-only')
-    project(root, {'src/legacy.py': "import hashlib\nhashlib.md5(b'old')\n# reviewed"})
+    project(root, {'src/legacy.py': "import os\nos.popen('ls')\n# reviewed"})
     git(root, 'commit', '-q', '-am', 'comment')
     assert scan_repo.main([str(root), '--base', 'main']) == 0
     out = capsys.readouterr().out
-    assert '[P1, pre-existing] src/legacy.py:2  py-weak-md5' in out and '**Gate: PASS**' in out
+    assert '[P1, pre-existing] src/legacy.py:2  py-os-popen' in out and '**Gate: PASS**' in out
     assert 'New: on lines changed since main, or not in the file before those changes.' in out
 
 
@@ -237,7 +237,7 @@ def test_base_rename_without_edits_changes_nothing_but_a_change_with_no_line_dif
     report = json.loads(capsys.readouterr().out)
     assert report['files'] == ['src/moved.py']
     assert [(f['path'], f['start_line'], f['rule_id'], f['priority'], f['new']) for f in report['findings']] == [
-        ('src/moved.py', 2, 'py-weak-md5', 'P1', False)]
+        ('src/moved.py', 2, 'py-os-popen', 'P1', False)]
 
     git(root, 'switch', '-q', 'main')
     git(root, 'switch', '-q', '-c', 'mode-only')
@@ -260,7 +260,7 @@ def test_base_exits_with_two_when_a_changed_file_is_missing_from_the_working_tre
 def test_text_report_says_so_when_there_is_nothing_to_scan(tmp_path, capsys):
     assert scan_repo.main([str(project(tmp_path, {'README.md': 'nothing to scan', 'docs/guide.md': 'eval(code)'}))]) == 0
     out = capsys.readouterr().out
-    assert '0 Python, JavaScript and TypeScript files, 29 service-owned rules.' in out
+    assert '0 Python, JavaScript and TypeScript files, 41 service-owned rules.' in out
     assert 'No supported Python, JavaScript or TypeScript files to scan.' in out and 'Gate' not in out
 
 
