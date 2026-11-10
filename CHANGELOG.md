@@ -4,6 +4,10 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Fixed
+- `deploy/validate_scanner.py`, the scanner check an operator runs against the production image, still checked only the 29 rules from before 2.1.0 while printing "all". It now has a sample for each of the 41 rules, checks the safe forms of the new ones, and fails if any rule in the rule file has no sample. A test runs it, so CI catches a rule added without one.
+
 ## [2.1.0] - 2026-11-10
 ### Added
 - **Rules for request data reaching a dangerous call** (12 new rules, 41 in all: 21 Python, 20 JavaScript and TypeScript). Semgrep taint mode follows request data (Flask, Django and Express) within a function to SQL queries (`py-sql-injection`, `js-sql-injection`), file paths (`py-path-traversal`, `js-path-traversal`), outgoing requests (`py-ssrf`, `js-ssrf`) and HTML responses (`py-xss`, `js-xss`), all high severity. Numbers parsed from it, escaped or `basename`d values, records looked up with it, URLs with a fixed host, JSON responses and parameterized queries don't count. `py-sql-formatted-query` and `js-sql-formatted-query` (medium) flag a SQL query built by formatting any value, and `py-weak-password-hash` and `js-weak-password-hash` (high) flag md5 or sha1 applied to a password or secret. On OWASP NodeGoat the new rules add the server-side request forgery in `research.js` (7 P1 instead of 6), and on OWASP Juice Shop they find the SQL injections in `login.ts` and `search.ts` and the request forgery in the profile-image upload.

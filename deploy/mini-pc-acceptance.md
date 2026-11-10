@@ -11,7 +11,7 @@ PRSEC_SCANNER_IMAGE='APPROVED_IMAGE@sha256:APPROVED_DIGEST' \
   .venv-service/bin/python deploy/accept_linux.py
 ```
 
-Capture actual identity, mount/network/capability/resource evidence and all 29 rule results. Additionally test OOM/PID exhaustion, timeout/overflow cleanup and host reboot. Exercise cleanup denial/daemon loss: a failed absence check must never produce a pass. If logs contain `container_cleanup_unconfirmed`, inspect the exact generated container name and resolve the orphan/daemon issue under the operator's authority before resuming workload. No such Linux tests have run on this Mac.
+Capture actual identity, mount/network/capability/resource evidence and all 41 rule results. Additionally test OOM/PID exhaustion, timeout/overflow cleanup and host reboot. Exercise cleanup denial/daemon loss: a failed absence check must never produce a pass. If logs contain `container_cleanup_unconfirmed`, inspect the exact generated container name and resolve the orphan/daemon issue under the operator's authority before resuming workload. No such Linux tests have run on this Mac.
 
 4. **Queue migration and role configuration.** Stop intake/worker, verify a WAL-consistent backup, inspect/restore into a new location, quarantine/replay legacy contextless jobs, and preserve Check IDs/cooldowns. Follow [production-operations.md](production-operations.md), then run as each actual role:
 

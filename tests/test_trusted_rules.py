@@ -481,3 +481,16 @@ def test_a_pull_request_is_scanned_and_triaged_against_its_diff(tmp_path, monkey
     assert {(f['path'], f['rule_id']): (f['priority'], f['new']) for f in findings} == PULL_REQUEST_TRIAGE
     assert gate(findings) == 'failure'
     assert [f['priority'] for f in findings] == sorted(f['priority'] for f in findings)
+
+
+def test_the_deployment_scanner_check_covers_every_rule(monkeypatch, capsys):
+    # deploy/validate_scanner.py is what an operator runs against the production scanner image.
+    from deploy import validate_scanner
+    monkeypatch.setenv('PRSEC_MODE', 'local')
+    monkeypatch.setenv('PRSEC_SCANNER_BACKEND', 'local')
+    validate_scanner.main()
+    assert f'PASS: all {len(RULES)} trusted rules' in capsys.readouterr().out
+    # A rule without a sample fails the check instead of passing unchecked.
+    monkeypatch.setattr(validate_scanner, 'EXPECTED', validate_scanner.EXPECTED - {'py-xss'})
+    with pytest.raises(AssertionError, match="no sample for {'py-xss'}"):
+        validate_scanner.main()

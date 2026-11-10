@@ -70,7 +70,7 @@ export PRSEC_SCANNER_IMAGE='APPROVED_IMAGE@sha256:APPROVED_DIGEST'
 .venv-service/bin/python deploy/accept_linux.py
 ```
 
-The runner executes actual container-boundary probes and all 29 production rules. It installs nothing, pulls no image, changes no settings and makes no GitHub calls. It fails immediately on macOS/root or if application credentials are present. Remaining explicit gates: dependency/OS/SBOM audit, separate-UID PEM/socket denial, OOM/PID exhaustion and host reboot recovery, approved HTTPS ingress, and real GitHub delivery/Check/crash-recovery tests. Existing detailed boundary/release runbooks still apply.
+The runner executes actual container-boundary probes and all 41 production rules. It installs nothing, pulls no image, changes no settings and makes no GitHub calls. It fails immediately on macOS/root or if application credentials are present. Remaining explicit gates: dependency/OS/SBOM audit, separate-UID PEM/socket denial, OOM/PID exhaustion and host reboot recovery, approved HTTPS ingress, and real GitHub delivery/Check/crash-recovery tests. Existing detailed boundary/release runbooks still apply.
 
 ## Current evidence
 
