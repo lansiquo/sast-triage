@@ -116,8 +116,8 @@ both runs.
 ## Use it on your project
 
 Requires Python 3.11–3.14. A scan reads source files only: nothing is run or installed, and it needs no
-GitHub account, token or network. `requirements-cli.txt` installs only Semgrep, pinned to the tested
-1.79.0; set `SEMGREP_BIN` to use another.
+GitHub account, token or network. `requirements-cli.txt` installs only Semgrep (pinned to the tested
+1.79.0) and certifi; set `SEMGREP_BIN` to use another Semgrep.
 
 ```bash
 git clone https://github.com/lansiquo/sast-triage.git
