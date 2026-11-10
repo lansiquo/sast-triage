@@ -89,7 +89,7 @@ The output, without the legend:
 sast-triage scan of NodeGoat, changes since HEAD~2
 A finding is new when it covers a line changed since the base, or was not in the file before; only a new P1 fails.
 2 changed Python, JavaScript and TypeScript files, 41 service-owned rules.
-Skipped: .git, node_modules, vendor, dist, build, coverage, .hg, .svn, .venv, venv, __pycache__ folders and minified *.min.js files.
+Skipped: .git, .hg, .svn, .venv, venv, __pycache__, node_modules folders and minified *.min.js files.
 
 Changes since HEAD~2 (2 files): SUCCESS
   [P2, pre-existing] app/routes/index.js:72  js-open-redirect
@@ -141,8 +141,11 @@ changed, or when the file didn't have it at the merge base: the same labels a pu
 prints the result as JSON, `--markdown FILE` also writes the Markdown summary, and `--timeout` limits the
 scan (default 300 seconds).
 
-Files in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv folders, and minified
-`*.min.js` files, are skipped. The project's own Semgrep rules, ignore files and git diff helpers are not used.
+A full scan skips files in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv
+folders, and minified `*.min.js` files. With `--base`, changed files in `vendor`, `dist`, `build` and
+`coverage` are scanned too, as the GitHub App scans them; changed files it still skips are listed. A folder
+that can't be read stops the scan with exit status 2. The project's own Semgrep rules, ignore files and git
+diff helpers are not used.
 
 ## GitHub Action
 
@@ -277,7 +280,7 @@ rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy
 |---|---|
 | 0 | The gate passes: no new P1 finding, or nothing to scan |
 | 1 | The gate fails: at least one new P1 finding |
-| 2 | Usage, git or scanner error, such as a missing directory, an unknown `--base` ref, a file over 1 MiB or an incomplete scan; no result is issued |
+| 2 | Usage, git or scanner error, such as a missing directory, an unknown `--base` ref, a folder that can't be read, a file over 1 MiB or an incomplete scan; no result is issued |
 
 ## Scope and limits
 

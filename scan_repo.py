@@ -31,16 +31,20 @@ from trusted_rules import OFFLINE_RULESET
 # virtualenv and cache folders either, so listing a file there would fail the scan.
 EXCLUDED_DIRS = ('.git', 'node_modules', 'vendor', 'dist', 'build', 'coverage',
                  '.hg', '.svn', '.venv', 'venv', '__pycache__')
+# Changed files (--base) are scanned in build, dist, vendor and coverage folders too, as the GitHub
+# App scans them, so a change can't hide code there. Folders the scanner refuses, installed
+# dependencies and minified files are still left out, and the changed files there are listed.
+CHANGED_EXCLUDED_DIRS = ('.git', '.hg', '.svn', '.venv', 'venv', '__pycache__', 'node_modules')
 MINIFIED = re.compile(r'\.min\.[cm]?js$')
 MAX_FILE_BYTES = 1024 * 1024   # the runner's per-file limit
 RULE_COUNT = len(re.findall(r'^  - id: ', OFFLINE_RULESET, re.M))
 PASS, FAIL, ERROR = 0, 1, 2
 
 
-def scannable(path: str) -> bool:
+def scannable(path: str, excluded=EXCLUDED_DIRS) -> bool:
     """A supported source file outside the excluded folders, and not minified."""
     parts = path.split('/')
-    return is_source_path(parts[-1]) and not MINIFIED.search(parts[-1]) and not any(p in EXCLUDED_DIRS for p in parts[:-1])
+    return is_source_path(parts[-1]) and not MINIFIED.search(parts[-1]) and not any(p in excluded for p in parts[:-1])
 
 
 class DiffError(Exception):
@@ -74,8 +78,9 @@ def changes_since(root: Path, base: str):
     nothing, a move from test code to runtime code counts as entirely new, and
     a diff that does not parse is unknown (None), so every finding in it is new.
 
-    Also returns each file's path in the base (its old name after a rename);
-    a file the changes added has none.
+    Also returns each file's path in the base (its old name after a rename;
+    a file the changes added has none), and the changed source files that are
+    not scanned because they are in a folder in CHANGED_EXCLUDED_DIRS or minified.
     """
     if base.startswith('-'):
         raise DiffError(f'invalid base: {base}')
@@ -84,6 +89,7 @@ def changes_since(root: Path, base: str):
     fields = git(root, 'diff', '--relative', '--name-status', '-z', '-M', '--no-ext-diff', '--no-textconv', spec).split('\0')
     changed = {}
     previous = {}
+    skipped = []
     i = 0
     while i < len(fields) - 1:
         status = fields[i]
@@ -93,7 +99,11 @@ def changes_since(root: Path, base: str):
         else:
             old, path = None, fields[i + 1]
             i += 2
-        if status.startswith('D') or not scannable(path):
+        if status.startswith('D'):
+            continue
+        if not scannable(path, CHANGED_EXCLUDED_DIRS):
+            if is_source_path(path.split('/')[-1]):
+                skipped.append(path)
             continue
         if not status.startswith('A'):
             previous[path] = old if old is not None else path
@@ -107,7 +117,7 @@ def changes_since(root: Path, base: str):
             changed[path] = set() if status.startswith('R') and 'Binary files' not in patch else None
         else:
             changed[path] = added_lines(patch[hunks + 1:])
-    return changed, previous
+    return changed, previous, sorted(skipped)
 
 
 def base_findings(root: Path, base: str, previous: dict, config: str, timeout: int):
@@ -153,8 +163,11 @@ def base_findings(root: Path, base: str, previous: dict, config: str, timeout: i
 
 def source_files(root: Path):
     """Repository-relative paths of every supported source file, sorted. Symbolic links are skipped."""
+    def unreadable(error):
+        raise error   # a folder that can't be listed must not be skipped silently
+
     found = []
-    for directory, folders, files in os.walk(root):   # does not follow linked folders
+    for directory, folders, files in os.walk(root, onerror=unreadable):   # does not follow linked folders
         folders[:] = [name for name in folders if name not in EXCLUDED_DIRS]
         for name in files:
             path = Path(directory, name)
@@ -180,6 +193,15 @@ def markdown(findings, base=None):
     return summarize_findings(findings)[1].replace(NEW_LEGEND, meaning)
 
 
+def skipped_note(skipped):
+    """For the Markdown summary: the changed files a --base scan left out, so none are skipped silently."""
+    if not skipped:
+        return ''
+    shown = ', '.join('`' + re.sub(r'[\x00-\x1f`|]', '?', path) + '`' for path in skipped[:10])
+    more = f' and {len(skipped) - 10} more' if len(skipped) > 10 else ''
+    return f'\n\nSkipped changed files (dependency or tool folders, or minified): {shown}{more}.'
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('directory', type=Path, help='project to scan')
@@ -194,10 +216,10 @@ def main(argv=None):
     if not args.directory.is_dir():
         parser.error(f'not a directory: {args.directory}')
     root = args.directory.resolve()
-    previous = {}
+    previous, skipped = {}, []
     if args.base:
         try:
-            changed, previous = changes_since(root, args.base)
+            changed, previous, skipped = changes_since(root, args.base)
         except DiffError as error:
             print(f'error: cannot diff against {args.base}, no result issued.\n{error}', file=sys.stderr)
             return ERROR
@@ -208,7 +230,11 @@ def main(argv=None):
                   file=sys.stderr)
             return ERROR
     else:
-        files = source_files(root)
+        try:
+            files = source_files(root)
+        except OSError as error:
+            print(f'error: cannot list the project files, no result issued.\n{error}', file=sys.stderr)
+            return ERROR
         changed = dict.fromkeys(files)   # no diff: every file's changes are unknown, so every finding is new
     too_large = [name for name in files if (root / name).stat().st_size > MAX_FILE_BYTES]
     if too_large:
@@ -244,13 +270,13 @@ def main(argv=None):
     conclusion = gate(findings) if files else 'neutral'
 
     if args.markdown:
-        args.markdown.write_text(markdown(findings, args.base) + '\n')
+        args.markdown.write_text(markdown(findings, args.base) + skipped_note(skipped) + '\n')
     scan = f'changes since {args.base}' if args.base else 'full: every finding counts as new'
     if args.json:
         print(json.dumps({'directory': str(args.directory), 'scan': scan, 'base': args.base,
                           'files_scanned': len(files), 'files': files, 'rules': RULE_COUNT,
-                          'conclusion': conclusion, 'counts': summarize_findings(findings)[0],
-                          'findings': findings}, indent=2))
+                          'skipped_changed_files': skipped, 'conclusion': conclusion,
+                          'counts': summarize_findings(findings)[0], 'findings': findings}, indent=2))
     else:
         if args.base:
             print(f'sast-triage scan of {args.directory}, changes since {args.base}')
@@ -263,7 +289,10 @@ def main(argv=None):
             print('Full scan: every finding counts as new (there is no diff).')
             print(f'{len(files)} Python, JavaScript and TypeScript files, {RULE_COUNT} service-owned rules.')
             title = f'Full scan ({len(files)} files)'
-        print(f'Skipped: {", ".join(EXCLUDED_DIRS)} folders and minified *.min.js files.')
+        print(f'Skipped: {", ".join(CHANGED_EXCLUDED_DIRS if args.base else EXCLUDED_DIRS)} folders and minified '
+              '*.min.js files.')
+        if skipped:
+            print(f'Skipped changed files: {", ".join(skipped)}')
         if files:
             print_summary(title, findings, conclusion, args.base)
         else:

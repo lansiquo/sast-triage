@@ -530,8 +530,15 @@ def run_semgrep_pipeline(
             summary = summary_md
 
     except GitHubRateLimitError:
-        defer_completion = True
-        raise
+        if MODE == 'durable':
+            # The worker retries after the cooldown and completes this Check then.
+            defer_completion = True
+            raise
+        # Local mode has no retry: complete the Check as failed instead of leaving it in progress.
+        conclusion = "failure"
+        scan_error = 'rate_limited'
+        summary = "Scan incomplete: GitHub API rate limit reached. No clean result was issued; re-run the check later."
+        log.error("pipeline error type=%s", scan_error)
     except Exception as e:
         status = getattr(getattr(e, 'response', None), 'status_code', None)
         permanent = isinstance(e, requests.HTTPError) and status in PERMANENT_HTTP_STATUSES

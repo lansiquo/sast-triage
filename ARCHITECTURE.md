@@ -69,7 +69,7 @@ flowchart TD
 - **Fail closed.** Scanner errors, malformed output, unknown severities and files Semgrep did not report as scanned fail the check; only a complete scan can pass. A missing or unreadable diff makes every finding in that file new, and so does a base version that is missing, too large or not scannable. A failed merge-base lookup or base download fails the check.
 - **Deduplication (durable).** A job's id is the SHA-256 of its normalized payload, so redeliveries map to the existing job; a real reopen adds a hash of `X-GitHub-Delivery` and scans again.
 - **Retries (durable).** Transient failures requeue the job with backoff `min(300 s, 5 s × 2^attempts)`; after 8 attempts it is marked failed. Permanent GitHub errors fail it without retry and complete the Check as failure.
-- **Rate limits (durable).** HTTP 429, or 403 with `Retry-After` or `X-RateLimit-Remaining: 0`, pauses every claim for at least 60 s or the reset time, including after a restart.
+- **Rate limits (durable).** HTTP 429, or 403 with `Retry-After` or `X-RateLimit-Remaining: 0`, pauses every claim for at least 60 s or the reset time, including after a restart. Local mode has no retry, so it completes the Check as failure and the check can be re-run later.
 - **Stale context (durable).** The worker re-reads the pull request during the scan; if it closed or its head or base changed, the Check is completed as `cancelled`.
 - **Recovery (durable).** On start the worker returns interrupted jobs to the queue and fails those that used all attempts. Processing is at-least-once.
 - **Limits.** 10,000 stored jobs; done jobs are pruned after 30 days. `/ready` returns 503 in durable mode until configuration is complete and a worker heartbeat is under five minutes old.

@@ -338,3 +338,56 @@ def test_base_scans_once_when_every_finding_is_on_a_changed_line(tmp_path, monke
     assert [(f['path'], f['new_because']) for f in json.loads(capsys.readouterr().out)['findings']] == [
         ('web/upload.js', 'changed lines')]
     assert len(roots) == 1                                        # no base version was scanned
+
+
+def test_base_scans_changed_files_in_build_dist_vendor_and_coverage_folders(tmp_path, capsys):
+    # The GitHub App scans these, so a change must not pass by putting code in such a folder.
+    project(tmp_path, {'app/main.py': 'x = 1'})
+    git(tmp_path, 'init', '-q', '-b', 'main')
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'base')
+    git(tmp_path, 'switch', '-q', '-c', 'feature')
+    project(tmp_path, {'app/build/handler.py': 'import os\nos.system(cmd)', 'web/vendor/lib.js': 'eval(code);',
+                       'dist/bundle.js': 'eval(code);', 'coverage/report.js': 'eval(code);',
+                       'node_modules/pkg/index.js': 'eval(code);', 'public/app.min.js': 'eval(code);',
+                       'docs/notes.md': 'eval(code)'})
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'feature')
+    summary = tmp_path / 'summary.md'
+    assert scan_repo.main([str(tmp_path), '--base', 'main', '--json', '--markdown', str(summary)]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report['files'] == ['app/build/handler.py', 'coverage/report.js', 'dist/bundle.js', 'web/vendor/lib.js']
+    assert {f['path'] for f in report['findings'] if f['priority'] == 'P1' and f['new']} == set(report['files'])
+    # Still left out, but listed rather than skipped silently.
+    assert report['skipped_changed_files'] == ['node_modules/pkg/index.js', 'public/app.min.js']
+    assert summary.read_text().endswith('Skipped changed files (dependency or tool folders, or minified): '
+                                        '`node_modules/pkg/index.js`, `public/app.min.js`.\n')
+    assert scan_repo.main([str(tmp_path), '--base', 'main']) == 1
+    out = capsys.readouterr().out
+    assert 'Skipped: .git, .hg, .svn, .venv, venv, __pycache__, node_modules folders and minified' in out
+    assert 'Skipped changed files: node_modules/pkg/index.js, public/app.min.js\n' in out
+
+
+def test_full_scan_exits_with_two_when_a_folder_cannot_be_listed(tmp_path, monkeypatch, capsys):
+    root = project(tmp_path, {'app.js': 'const a = 1;', 'src/secret/x.js': 'eval(code);'})
+    locked, scandir = root / 'src' / 'secret', scan_repo.os.scandir
+    def refuse(path='.'):
+        if Path(path) == locked:
+            raise PermissionError(13, 'Permission denied', str(path))
+        return scandir(path)
+    monkeypatch.setattr(scan_repo.os, 'scandir', refuse)
+    assert scan_repo.main([str(root)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and 'no result issued' in captured.err and 'secret' in captured.err
+
+
+@pytest.mark.skipif(not hasattr(scan_repo.os, 'geteuid') or scan_repo.os.geteuid() == 0,
+                    reason='needs a user that file permissions apply to')
+def test_full_scan_exits_with_two_on_a_folder_without_read_permission(tmp_path, capsys):
+    root = project(tmp_path, {'app.js': 'const a = 1;', 'src/secret/x.js': 'eval(code);'})
+    (root / 'src' / 'secret').chmod(0)
+    try:
+        assert scan_repo.main([str(root)]) == 2
+    finally:
+        (root / 'src' / 'secret').chmod(0o755)
+    assert 'no result issued' in capsys.readouterr().err

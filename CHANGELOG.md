@@ -5,7 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- **`scan_repo.py --base` and the GitHub Action skipped changed files in `build`, `dist`, `vendor` and `coverage` folders,** at any depth, without saying so, so a pull request that added `app/build/handler.py` with `os.system(request.args["c"])` passed the gate. The GitHub App scans those files. A `--base` scan now scans them too and skips only the folders the scanner refuses, `node_modules` and minified `*.min.js` files; the changed files it skips are listed in the output, under `skipped_changed_files` in the JSON and in the Markdown summary. A changed file there over 1 MiB now stops the scan with exit status 2, as in the App. Full scans skip the same folders as before.
+
 ### Fixed
+- A full scan skipped folders it could not read and could pass. It now stops with exit status 2 and issues no result.
+- In local mode, a GitHub API rate limit during a scan left the Check in progress for good, because only durable mode retries. Local mode now completes it as failure ("Scan incomplete: GitHub API rate limit reached"), so it can be re-run.
 - `deploy/validate_scanner.py`, the scanner check an operator runs against the production image, still checked only the 29 rules from before 2.1.0 while printing "all". It now has a sample for each of the 41 rules, checks the safe forms of the new ones, and fails if any rule in the rule file has no sample. A test runs it, so CI catches a rule added without one.
 
 ## [2.1.0] - 2026-11-10

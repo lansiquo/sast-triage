@@ -50,7 +50,7 @@ def test_refresh_failure_logs_no_private_message(monkeypatch, caplog):
 
 
 def pipeline():
-    app.run_semgrep_pipeline('lansiquo','PR_Reviewer','lansiquo','PR_Reviewer',1,
+    return app.run_semgrep_pipeline('lansiquo','PR_Reviewer','lansiquo','PR_Reviewer',1,
         'a'*40,80788483,'lansiquo','PR_Reviewer',99,'fake')
 
 
@@ -60,6 +60,18 @@ def test_pipeline_rate_limit_does_not_attempt_completion(monkeypatch):
     monkeypatch.setattr(app,'_get_json',limited)
     monkeypatch.setattr(app,'complete_check_run',lambda *a:pytest.fail('Must not call API during cooldown'))
     with pytest.raises(app.GitHubRateLimitError):pipeline()
+
+
+def test_local_rate_limit_completes_the_check_as_failed(monkeypatch):
+    # Local mode has no worker to retry, so the Check must not stay in progress.
+    monkeypatch.setattr(app,'MODE','local')
+    monkeypatch.setattr(app,'list_changed_files',lambda *a:{'main.py':None})
+    def limited(*a, **k): raise app.GitHubRateLimitError(response(403,**{'Retry-After':'60'}),60)
+    monkeypatch.setattr(app,'fetch_files',limited)
+    monkeypatch.setattr(app,'run_semgrep',lambda **k:pytest.fail('Must not scan without the files'))
+    completed=[];monkeypatch.setattr(app,'complete_check_run',lambda *a:completed.append(a))
+    assert pipeline()=={'conclusion':'failure','scan_error':'rate_limited'}
+    assert len(completed)==1 and completed[0][3]=='failure' and 'rate limit' in completed[0][5]
 
 
 def test_close_or_new_commit_during_scan_cancels_result(tmp_path, monkeypatch):
