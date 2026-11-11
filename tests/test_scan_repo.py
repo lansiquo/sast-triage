@@ -198,6 +198,17 @@ def test_base_errors_exit_with_two_and_issue_no_result(tmp_path, capsys, base):
     assert captured.out == '' and 'no result issued' in captured.err
 
 
+@pytest.mark.parametrize('arguments', [['--base='], ['--base', '']])
+def test_an_empty_base_is_a_usage_error_not_a_full_scan(tmp_path, capsys, arguments):
+    # An empty --base (a CI variable left unset) once ran a full scan, which skips vendor/build/dist folders.
+    root = repository(tmp_path)
+    with pytest.raises(SystemExit) as error:
+        scan_repo.main([str(root), *arguments, '--json'])
+    assert error.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and '--base' in captured.err
+
+
 def test_base_outside_a_git_repository_exits_with_two(tmp_path, capsys):
     assert scan_repo.main([str(project(tmp_path, {'a.py': 'x = 1'})), '--base', 'main']) == 2
     assert 'no result issued' in capsys.readouterr().err
