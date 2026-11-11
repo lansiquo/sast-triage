@@ -126,11 +126,11 @@ Done when: a real PR is scanned end to end in durable mode on the host, worker r
 
 | ID | Item | Size | Status | Needs owner | Acceptance |
 |---|---|---|---|---|---|
-| F-2.1 | Decide hosting and trust | S | planned | Self-hosted lab VM or hosted multi-tenant? Approve host, network exposure, credential placement? | A decision document records one option and each yes/no. |
-| F-2.2 | Decide the durable scanner path | S | planned | Semgrep 1.79.0 or Opengrep? | A decision record names one scanner, exact version and required compatibility evidence. |
-| F-2.3 | Make the go-live evidence checklist reviewable | M | planned | Approve the verification and monitoring plan; name an operator? | Every required release verification has an expected result and a NOT_RUN evidence field. |
-| F-2.4 | Prepare a locally installable CLI package | M | planned | Approve `pyproject.toml`, package name, build backend? | An offline-built wheel's entry point scans `tests/fixtures/project` with exit 1. |
-| F-2.5 | Decide the product framing before Phase 1 | S | planned | Semgrep reviewer or triage/gate layer over any scanner? Which of imported SAST, new languages, secrets, SCA? | A decision document records one choice and an in/out scope list. |
+| F-2.1 | Decide hosting and trust | S | planned | Choose a self-hosted lab service on the dedicated Linux VM or a hosted multi-tenant service. Separately approve the host, network exposure and placement of the App key and webhook secret before any provisioning or cutover. | A decision document records one option and each yes/no. |
+| F-2.2 | Decide the durable scanner path | S | planned | Choose the tested Semgrep 1.79.0 pin or the evaluated Opengrep path for durable mode. Any dependency/version change, image audit, deployment lock or non-sample change to deploy/validate_scanner.py requires a separate owner assignment. | A decision record names one scanner, exact version and required compatibility evidence. |
+| F-2.3 | Make the go-live evidence checklist reviewable | M | planned | After F-2.1 and F-2.2, approve the durable-mode verification plan and name an operator for host setup, live GitHub verification and minimal monitoring. These are owner-run operations, not authorized Feature Bot actions. | Every required release verification has an expected result and a NOT_RUN evidence field. |
+| F-2.4 | Prepare a locally installable CLI package | M | planned | Approve adding pyproject.toml and package metadata/entry points, the package name and the build backend. Any new build dependency, version field or release automation needs owner work; publishing and signing remain separate decisions. | An offline-built wheel's entry point scans `tests/fixtures/project` with exit 1. |
+| F-2.5 | Decide the product framing before Phase 1 | S | planned | Choose "Semgrep reviewer" or "triage/gate layer over any scanner". The latter needs explicit approval for imported scanner output, new languages and separate future secrets/SCA adapters; approving this decision does not approve every adapter. | A decision document records one choice and an in/out scope list. |
 
 ## Step 3: Become a triage platform (SARIF ingestion)
 
@@ -140,11 +140,11 @@ Done when: two scanners' SARIF (for example Semgrep and CodeQL) pass through one
 
 | ID | Item | Size | Status | Needs owner | Acceptance |
 |---|---|---|---|---|---|
-| F-3.1 | Parse SARIF into the shared finding model | M | planned | Approve importing external SARIF and its trust boundary? | Semgrep and CodeQL fixtures load into F-1.1 fields; malformed input yields no findings. |
-| F-3.2 | Define explicit severity mappings for imported results | M | planned | Service-owned or operator-supplied mapping? Approve the mapping table? | Equivalent high-severity Semgrep and CodeQL fixtures rank identically; unknown severities fail. |
-| F-3.3 | Carry diff-aware labels through imported findings | M | planned | Approve the head/base provenance and fingerprint contract? | A finding absent from the base stays new despite a matching `partialFingerprint`. |
-| F-3.4 | Triage supplied Semgrep and CodeQL reports from the CLI | M | planned | Approve a separate import CLI and its language scope? | Import exits 1 for a new P1, 0 for a complete clean report, 2 for invalid input. |
-| F-3.5 | Decide the finding datastore path before Phase 2 | S | planned | SQLite-only or SQLite plus Postgres? Approve finding identity and migration contract? | A decision record names one datastore path and defines stable finding identity. |
+| F-3.1 | Parse SARIF into the shared finding model | M | planned | After F-2.5, approve importing externally produced SARIF 2.1.0 and its trust boundary. This does not approve running another scanner or accepting arbitrary languages without the selected scope. | Semgrep and CodeQL fixtures load into F-1.1 fields; malformed input yields no findings. |
+| F-3.2 | Define explicit severity mappings for imported results | M | planned | Approve the per-tool mapping and its configuration authority because it changes how external severities become P1–P3. Choose service-owned mapping only or an explicitly supplied operator mapping; scanned-repository configuration must never decide it. | Equivalent high-severity Semgrep and CodeQL fixtures rank identically; unknown severities fail. |
+| F-3.3 | Carry diff-aware labels through imported findings | M | planned | Approve the imported head/base provenance and fingerprint contract before changing matching behavior. A foreign partialFingerprint alone must never establish that a finding is pre-existing. | A finding absent from the base stays new despite a matching `partialFingerprint`. |
+| F-3.4 | Triage supplied Semgrep and CodeQL reports from the CLI | M | planned | Approve a distinct import CLI interface and its explicit supported-language scope, following F-2.5. It reads reports and source evidence only; it never invokes or installs CodeQL or another scanner. | Import exits 1 for a new P1, 0 for a complete clean report, 2 for invalid input. |
+| F-3.5 | Decide the finding datastore path before Phase 2 | S | planned | Choose SQLite-only self-hosting or SQLite plus a Postgres tier. Approve the stable finding identity and migration contract before storing runs or findings; a database driver or dependency remains a separate owner change. | A decision record names one datastore path and defines stable finding identity. |
 
 ## Step 4: Persistence and finding lifecycle
 
@@ -154,11 +154,11 @@ Done when: a finding's lifecycle (first-seen, fixed, reintroduced) persists acro
 
 | ID | Item | Size | Status | Needs owner | Acceptance |
 |---|---|---|---|---|---|
-| F-4.1 | Persist completed runs and stable finding records | M | planned | Approve stored findings, the retention/access boundary and storage module? | Replaying a completed run duplicates no finding and keeps first-seen. |
-| F-4.2 | Track fixed and reintroduced findings | M | planned | Approve lifecycle transitions and the coverage evidence proving a fix? | Only a complete same-scope run can mark an absent finding fixed. |
-| F-4.3 | Record expiring accepted-risk decisions | M | planned | Who accepts risk; accepted-risk and won't-fix meanings; expiry; gate effect? | A fake clock shows expiry restores unsuppressed behavior; `nosemgrep` creates no record. |
-| F-4.4 | Adopt an explicit branch baseline | M | planned | Who may adopt a baseline, and its gate effect? | After adopting a complete run, only an additional finding is new. |
-| F-4.5 | Compute finding age and overdue status | S | planned | Which per-severity targets? Does accepted risk pause the clock? | Fake-clock tests cover just before, at and after each deadline. |
+| F-4.1 | Persist completed runs and stable finding records | M | planned | After F-3.5, approve durable storage of findings and source-derived metadata, its retention and access boundary, and the new storage module. Use temporary databases in tests only. | Replaying a completed run duplicates no finding and keeps first-seen. |
+| F-4.2 | Track fixed and reintroduced findings | M | planned | Approve lifecycle semantics over the F-4.1 store, including how complete scan coverage establishes absence. Depends on F-3.5. | Only a complete same-scope run can mark an absent finding fixed. |
+| F-4.3 | Record expiring accepted-risk decisions | M | planned | Approve service-side suppression authority, the meanings of accepted-risk and won’t-fix, expiry requirements and their effect on the gate. No scanned-repository comment or config may authorize suppression. | A fake clock shows expiry restores unsuppressed behavior; `nosemgrep` creates no record. |
+| F-4.4 | Adopt an explicit branch baseline | M | planned | Approve who may adopt a baseline and how baseline adoption affects gate semantics. A pull request author must not be able to promote their own findings into a trusted baseline. | After adopting a complete run, only an additional finding is new. |
+| F-4.5 | Compute finding age and overdue status | S | planned | Approve per-severity remediation targets and whether accepted-risk periods pause the SLA clock. SLA reporting must not change the gate unless separately approved. | Fake-clock tests cover just before, at and after each deadline. |
 
 ## Step 5: Multi-tenancy, policy-as-code and access control
 
@@ -168,11 +168,11 @@ Done when: two tenants run fully isolated, each with its own enforced gate polic
 
 | ID | Item | Size | Status | Needs owner | Acceptance |
 |---|---|---|---|---|---|
-| F-5.1 | Opt-in gate on new P2 findings | M | planned | New-P1-only everywhere (a), opt-in P2 for CLI and Action (b), or App too (c)? | Option (b): `scan_repo.py DIR --fail-on P2` exits 1 on a new P1 or P2, else 0. |
-| F-5.2 | Enforce tenant isolation in stored findings | M | planned | Approve the tenant model and migration of stored records? | Tenant A cannot read or mutate tenant B's data. |
-| F-5.3 | Route App jobs by approved installation and repository | M | planned | Approve multi-installation routing? Which registration source? Shared or per-tenant cooldown? | Each token is narrowed to its job's one repository; unknown pairs enqueue nothing. |
-| F-5.4 | Load centrally governed team gate policy | M | planned | Which policy source, precedence, permitted exclusions and risk-acceptance roles? | Missing or invalid policy fails closed; repository-authored policy cannot override it. |
-| F-5.5 | Define and enforce the tenant role boundary | M | planned | Approve viewer/triager/admin capabilities? OIDC or SAML first? | Missing identity, unknown roles and tenant mismatch are denied, state unchanged. |
+| F-5.1 | Opt-in gate on new P2 findings | M | planned | Should a stricter gate exist? Choose one: (a) no, the gate stays "new P1 only" everywhere; (b) yes, for the command line and the Action only (`--fail-on P2` and a `fail-on` input), documented as a deliberate difference from the App; (c) yes, for the App too, through a service setting. The acceptance column is for option (b); option (c) requires an approved App-specific slice and parity tests before implementation. Option (a) drops this item through a roadmap PR. This is the first item in the policy-as-code phase. | Option (b): `scan_repo.py DIR --fail-on P2` exits 1 on a new P1 or P2, else 0. |
+| F-5.2 | Enforce tenant isolation in stored findings | M | planned | After F-2.1, F-2.5 and F-3.5, approve the tenant-to-installation/repository model and migration of stored records. Existing single-repository scope must not be widened implicitly. | Tenant A cannot read or mutate tenant B's data. |
+| F-5.3 | Route App jobs by approved installation and repository | M | planned | Approve multi-repository/multi-installation App scope and webhook changes after F-2.1 and F-5.2. Choose the allowed registration source; no job may expand its own scope or token permissions. Choose shared or per-tenant cooldown. | Each token is narrowed to its job's one repository; unknown pairs enqueue nothing. |
+| F-5.4 | Load centrally governed team gate policy | M | planned | Approve the policy source, precedence, permitted exclusions and risk-acceptance roles. This changes gate and trust semantics; scanned-repository policy cannot be trusted just because it is checked in. | Missing or invalid policy fails closed; repository-authored policy cannot override it. |
+| F-5.5 | Define and enforce the tenant role boundary | M | planned | Approve viewer/triager/admin capabilities and the authenticated-principal contract for future API/UI access. Choose OIDC first or SAML first for a separately scoped SSO integration; new auth dependencies need owner approval. | Missing identity, unknown roles and tenant mismatch are denied, state unchanged. |
 
 ## Step 6: Surfaces: API, dashboard, integrations
 
@@ -182,11 +182,11 @@ Done when: a real team triages findings through the API and dashboard and files 
 
 | ID | Item | Size | Status | Needs owner | Acceptance |
 |---|---|---|---|---|---|
-| F-6.1 | Upload SARIF to code scanning from the Action | M | planned | Stay tokenless (a), or upload with `github-token` and `security-events: write` (b, Robin edits SECURITY.md)? | Option (b): one mocked upload after a complete scan; exit 2 uploads nothing. |
-| F-6.2 | Expose a read-only findings and runs API | M | planned | REST or GraphQL first? Approve the authenticated API boundary? | Missing identity returns 401; a forbidden tenant or role returns 403 without data. |
-| F-6.3 | Export stored findings as SARIF, CSV and JSON | M | planned | Approve tenant-scoped bulk export, its limits and source-text handling? | Export counts match authorized findings; unauthorized export writes no artifact. |
-| F-6.4 | Show a read-only posture dashboard | M | planned | Approve the read-only UI surface and rendering approach? | An API failure shows an error, never a clean posture. |
-| F-6.5 | Create one Jira ticket from a finding | M | planned | Jira or ServiceNow first? Which destinations, credential scope and ticket fields? | A mocked retry returns the stored ticket mapping, no duplicate. |
+| F-6.1 | Upload SARIF to code scanning from the Action | M | planned | Should the Action upload SARIF itself? Choose one: (a) no, the Action stays tokenless and users upload with their own step (F-1.5); (b) yes, through a `github-token` input and the code scanning API, which needs `security-events: write` in the user's workflow and changes SECURITY.md's statement that the Action uses no token (an edit only Robin makes). The acceptance column is for option (b). | Option (b): one mocked upload after a complete scan; exit 2 uploads nothing. |
+| F-6.2 | Expose a read-only findings and runs API | M | planned | Choose REST first or GraphQL first; the proposed slice is REST. Approve the authenticated API trust boundary and dependencies only after F-5.5 and the separately approved SSO adapter are complete. | Missing identity returns 401; a forbidden tenant or role returns 403 without data. |
+| F-6.3 | Export stored findings as SARIF, CSV and JSON | M | planned | Approve authenticated bulk export, tenant limits and handling of source-derived text after F-6.2. Exports must preserve tenant isolation and existing scan output compatibility. | Export counts match authorized findings; unauthorized export writes no artifact. |
+| F-6.4 | Show a read-only posture dashboard | M | planned | Approve a UI surface and rendering approach after F-6.2 and the SSO adapter; any frontend dependency requires its own approval. This first slice is read-only. | An API failure shows an error, never a clean posture. |
+| F-6.5 | Create one Jira ticket from a finding | M | planned | Choose Jira first or ServiceNow first; this proposed slice is Jira. Approve outbound integration credentials, destination allowlisting, tenant authorization and the content allowed in tickets. | A mocked retry returns the stored ticket mapping, no duplicate. |
 
 ## Step 7: Scale and reliability
 
@@ -196,11 +196,11 @@ Done when: a load test passes at the target throughput and a failover loses no j
 
 | ID | Item | Size | Status | Needs owner | Acceptance |
 |---|---|---|---|---|---|
-| F-7.1 | Specify the Postgres schema and migration contract | S | planned | If Postgres: approve schema, server/driver versions and migration/rollback policy? | Every table, key and constraint maps from SQLite to Postgres with rollback examples. |
-| F-7.2 | Specify concurrent queue claims and backpressure | M | planned | Which queue backend, and lease, capacity, fairness and dead-letter rules? | A two-worker fake-clock model keeps one lease per job and loses none after a crash. |
-| F-7.3 | Drain a worker without losing claimed jobs | M | planned | Approve drain/readiness behavior and the grace period? | After a synthetic shutdown the worker stops claiming and restarts without losing its job. |
-| F-7.4 | Add a bounded capacity and latency model | M | planned | Which workload, throughput and latency targets? What budget for real load tests? | A fake-clock harness gives deterministic latency percentiles and fails on a missed target. |
-| F-7.5 | Specify isolated horizontal workers and HA failover | S | planned | Fixed-host containers or Kubernetes jobs? Approve the HA trust boundary and hosting cost? | A failure table names queue state, Check state and recovery per loss scenario. |
+| F-7.1 | Specify the Postgres schema and migration contract | S | planned | If F-3.5 chose a Postgres tier, approve its schema, supported server/driver versions and migration/rollback policy. SQLite-only selection requires a roadmap correction before this item proceeds. | Every table, key and constraint maps from SQLite to Postgres with rollback examples. |
+| F-7.2 | Specify concurrent queue claims and backpressure | M | planned | Approve a multi-worker queue design and backend after F-7.1, including lease expiry, queue bounds, dead-letter retention and tenant fairness. Removing the existing one-worker lock is not authorized by a design merge. | A two-worker fake-clock model keeps one lease per job and loses none after a crash. |
+| F-7.3 | Drain a worker without losing claimed jobs | M | planned | Approve durable worker shutdown behavior and its interaction with leases and readiness. Depends on the selected queue contract in F-7.2; deployment changes remain owner work. Approve the bounded grace period. | After a synthetic shutdown the worker stops claiming and restarts without losing its job. |
+| F-7.4 | Add a bounded capacity and latency model | M | planned | Approve a target workload, throughput and end-to-end latency budget, plus a separate environment/time/cost budget for any real load or soak test. | A fake-clock harness gives deterministic latency percentiles and fails on a missed target. |
+| F-7.5 | Specify isolated horizontal workers and HA failover | S | planned | Choose containers on fixed hosts or Kubernetes jobs, and approve the deployment trust boundary, hosting cost and HA datastore/queue prerequisites after F-2.1, F-7.1 and F-7.2. | A failure table names queue state, Check state and recovery per loss scenario. |
 
 ## Step 8: Enterprise operations and compliance
 
@@ -210,11 +210,11 @@ Done when: the service emits metrics and alerts, every release ships signed with
 
 | ID | Item | Size | Status | Needs owner | Acceptance |
 |---|---|---|---|---|---|
-| F-8.1 | Define operational signals and alert contracts | S | planned | Which telemetry fields, destinations, retention, SLO targets and paging owner? | Fixtures map healthy, stale-worker, terminal-failure and recovery events to expected alert states. |
-| F-8.2 | Make security decisions auditable with a hash chain | M | planned | Approve the audit schema, access/retention controls and checkpoint model? | Changing or deleting an interior event fails chain verification. |
-| F-8.3 | Define retention, residency and the data map | S | planned | Which retention periods, residency boundaries, deletion authority and hold rules? | Timestamp fixtures give keep, delete or hold at each boundary. |
-| F-8.4 | Specify release provenance and recurring supply-chain checks | S | planned | Which signing identity, SBOM format, provenance level, audit cadence and response SLA? | Valid and invalid evidence examples have expected verification outcomes. |
-| F-8.5 | Map controls and prepare external assurance | M | planned | Which threat-model scope and control framework? Which pen-test scope, provider and budget? | The threat model maps each new data flow to a control, test or open owner gate. |
+| F-8.1 | Define operational signals and alert contracts | S | planned | Approve metrics/traces fields, SLO targets, telemetry retention/export destinations and paging ownership. OpenTelemetry/Prometheus/Grafana dependencies, dashboards and alert infrastructure require separate owner work. | Fixtures map healthy, stale-worker, terminal-failure and recovery events to expected alert states. |
+| F-8.2 | Make security decisions auditable with a hash chain | M | planned | Approve audit event schema, access/retention controls and the trusted checkpoint model. A local hash chain detects alteration only relative to a protected checkpoint; external anchoring is a separate trust decision. | Changing or deleting an interior event fails chain verification. |
+| F-8.3 | Define retention, residency and the data map | S | planned | Approve retention periods by data class, residency choices, deletion authority and treatment of audit/legal holds before any purge or relocation is implemented. | Timestamp fixtures give keep, delete or hold at each boundary. |
+| F-8.4 | Specify release provenance and recurring supply-chain checks | S | planned | Approve signing identity, SBOM format, provenance level, dependency/image audit cadence and vulnerability response SLA. Workflow, release, deployment and SECURITY.md edits remain owner-only assignments. | Valid and invalid evidence examples have expected verification outcomes. |
+| F-8.5 | Map controls and prepare external assurance | M | planned | Approve the threat-model scope, external penetration-test scope/provider/budget and the control framework. SOC 2-oriented mapping is not certification or permission to test a live target. | The threat model maps each new data flow to a control, test or open owner gate. |
 
 ## Cross-cutting tracks
 
@@ -226,6 +226,10 @@ Done when: the service emits metrics and alerts, every release ships signed with
 
 ### Native rule coverage
 
-Needs owner: after F-2.5, should native rule coverage come before or after additional scanner adapters? Unscheduled candidates (no F IDs until a roadmap PR places them): log injection (CWE-117), nested-quantifier regex (CWE-1333), and FastAPI/Starlette request data for `py-sql-injection`, `py-path-traversal` and `py-ssrf`.
+Needs owner: after F-2.5, should native rule coverage come before additional scanner adapters or after them? These three candidates from the previous proposal are deliberately deferred, with no scheduled F IDs until Robin approves their priority and a roadmap PR places them in an eligible step. They change no gate threshold and add no language.
 
-Rule slices include their `deploy/validate_scanner.py` rule sample. Needs owner: any change to that deployment file beyond an added or changed service-owned rule sample. This is no blanket exception for deployment work.
+- **Log injection:** `py-log-injection` and `js-log-injection`, WARNING/medium, CWE-117. README's NodeGoat "Missed" list provides the evidence. Preserve the proposed within-function request-to-logging coverage for Python `logging` and Express-to-`console`, including later arguments; live positive/negative fixtures must distinguish request text from literals, numeric conversion, removed line breaks and JSON serialization. No cross-function flow or extra logging libraries.
+- **Nested-quantifier regex:** `py-regex-nested-quantifier` and `js-regex-nested-quantifier`, WARNING/medium, CWE-1333. README names the missed ReDoS-prone regex. Preserve literal nested-repetition cases in Python `re`, JS regex literals and `RegExp`; safe non-nested patterns, runtime-built patterns and unrelated strings must remain unflagged. No general claim to decide regex complexity.
+- **FastAPI/Starlette request data:** extend `py-sql-injection`, `py-path-traversal` and `py-ssrf` to `request.query_params` and `request.path_params`. README currently names Flask/Django. Preserve positive request-to-sink cases and negative numeric, parameterized-query, safe-filename and fixed-host examples; no `py-xss`, typed handler parameters or new rule IDs.
+
+Each scheduled rule slice must include live positive/negative tests on the approved pinned scanner (currently Semgrep 1.79.0), unchanged planted-P1 selfcheck, the corresponding `deploy/validate_scanner.py` **rule samples**, and all affected rule counts and README coverage statements. Needs owner: any change to that deployment file beyond an added or changed service-owned rule sample, including scanner compatibility, validation logic or harness changes. This is not a blanket exception for deployment work.
