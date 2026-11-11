@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- **`scan_repo.py --base ""` (or `--base=`) silently ran a full scan; an empty `--base` is now a usage error with exit status 2, and no result is issued.** For example, a CI job whose base variable is empty by mistake now stops with `--base needs a git ref; leave out --base for a full scan` instead of getting a full scan, which leaves out some folders that a `--base` scan covers. The GitHub Action is unchanged: it already leaves out `--base` when its `base` input is empty. [W-sast-triage-4]
 
 ## [2.1.1] - 2026-11-11
 ### Security
