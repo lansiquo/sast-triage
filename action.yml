@@ -34,6 +34,7 @@ runs:
         if [ "$base" = "none" ]; then base=""; fi
         args=("$SAST_PATH" --markdown "$RUNNER_TEMP/sast-triage.md")
         if [ -n "$base" ]; then args+=(--base "$base"); fi
+        rm -f "$RUNNER_TEMP/sast-triage.md"
         set +e
         "$RUNNER_TEMP/sast-triage-venv/bin/python" "$GITHUB_ACTION_PATH/scan_repo.py" "${args[@]}"
         code=$?

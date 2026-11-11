@@ -6,13 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
-- **`scan_repo.py --base ""` (or `--base=`) ran a full scan instead of rejecting the empty ref.** A CI job whose base variable was empty by mistake passed with exit status 0 on a change that `--base HEAD~1` failed, because a full scan skips `vendor`, `dist`, `build` and `coverage` folders that a `--base` scan covers. An empty `--base` is now a usage error with exit status 2, and no result is issued. The GitHub Action is unchanged: it already leaves out `--base` when its `base` input is empty. [W-sast-triage-4]
+- **`scan_repo.py --base ""` (or `--base=`) silently ran a full scan; an empty `--base` is now a usage error with exit status 2, and no result is issued.** For example, a CI job whose base variable is empty by mistake now stops with `--base needs a git ref; leave out --base for a full scan` instead of getting a full scan, which leaves out some folders that a `--base` scan covers. The GitHub Action is unchanged: it already leaves out `--base` when its `base` input is empty. [W-sast-triage-4]
 
-## [2.1.1] - 2026-11-10
+## [2.1.1] - 2026-11-11
 ### Security
 - **`scan_repo.py --base` and the GitHub Action skipped changed files in `build`, `dist`, `vendor` and `coverage` folders,** at any depth, without saying so, so a pull request that added `app/build/handler.py` with `os.system(request.args["c"])` passed the gate. The GitHub App scans those files. A `--base` scan now scans them too and skips only the folders the scanner refuses, `node_modules` and minified `*.min.js` files; the changed files it skips are listed in the output, under `skipped_changed_files` in the JSON and in the Markdown summary. A changed file there over 1 MiB now stops the scan with exit status 2, as in the App. Full scans skip the same folders as before.
 
 ### Fixed
+- **A repeated GitHub Action invocation could append an earlier scan's summary after a scan error; it now issues no summary for that error.** For example, a clean scan followed by a missing-directory scan in the same job no longer repeats `Gate: PASS`; the second scan still exits with status 2. [W-sast-triage-12]
 - A full scan skipped folders it could not read and could pass. It now stops with exit status 2 and issues no result.
 - In local mode, a GitHub API rate limit during a scan left the Check in progress for good, because only durable mode retries. Local mode now completes it as failure ("Scan incomplete: GitHub API rate limit reached"), so it can be re-run.
 - `deploy/validate_scanner.py`, the scanner check an operator runs against the production image, still checked only the 29 rules from before 2.1.0 while printing "all". It now has a sample for each of the 41 rules, checks the safe forms of the new ones, and fails if any rule in the rule file has no sample. A test runs it, so CI catches a rule added without one.
