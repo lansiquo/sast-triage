@@ -215,6 +215,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not args.directory.is_dir():
         parser.error(f'not a directory: {args.directory}')
+    if args.base == '':   # every check below reads an empty ref as "no --base", which would run a full scan
+        parser.error('--base needs a git ref; leave out --base for a full scan')
     root = args.directory.resolve()
     previous, skipped = {}, []
     if args.base:
