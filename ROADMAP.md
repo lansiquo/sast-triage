@@ -5,14 +5,14 @@ Owner: Robin. Adopted 2026-11-11.
 Owner-approved order of work for sast-triage. Items are built one at a time, lowest step first.
 Status changes only through merged pull requests.
 
-sast-triage is a diff-aware SAST gate for Python, JavaScript and TypeScript (CLI, GitHub Action, GitHub App; v2.1.1). This roadmap takes it to a multi-tool, multi-tenant platform: five quick wins (Step 1), then Robin's Phases 0–6 (Steps 2–8). Each item is one week-sized PR.
+sast-triage is a diff-aware SAST gate for Python, JavaScript and TypeScript (CLI, GitHub Action, GitHub App; v2.1.2). This roadmap takes it to a multi-tool, multi-tenant platform: five quick wins (Step 1), then Robin's Phases 0–6 (Steps 2–8). Each item is one week-sized PR.
 
 Merging approves order and acceptance, never a `Needs owner` decision or any dependency, deployment, workflow, hosting, release or trust-boundary change. "Done when" gates need real evidence, and the next step waits for them. Steps 2–8 have one row per item; full Why, Out of scope and Touches arrive by roadmap PR before a step becomes current.
 
 ## Where it stands today
 
 - One engine, three surfaces; findings are new or pre-existing against the base, ranked P1–P3; only a new P1 fails the gate.
-- Fail closed everywhere; 41 service-owned rules (8 taint-mode); 202 tests on Python 3.11–3.14.
+- Fail closed everywhere; 41 service-owned rules (8 taint-mode); 204 tests on Python 3.11–3.14.
 
 | Dimension | Today | Enterprise bar |
 |---|---|---|
@@ -160,7 +160,7 @@ Done when: two tenants run fully isolated, each with its own enforced gate polic
 
 | ID | Item | Size | Status | Owner | Acceptance |
 |---|---|---|---|---|---|
-| F-5.1 | Opt-in gate on new P2 findings | M | planned | Needs owner | Option (b): `scan_repo.py DIR --fail-on P2` exits 1 on a new P1 or P2, else 0. |
+| F-5.1 | Opt-in gate on new P2 findings | M | planned | Needs owner | If approved: `scan_repo.py DIR --fail-on P2` exits 1 on a new P1 or P2, else 0. |
 | F-5.2 | Enforce tenant isolation in stored findings | M | planned | Needs owner | Tenant A cannot read or mutate tenant B's data. |
 | F-5.3 | Route App jobs by approved installation and repository | M | planned | Needs owner | Each token is narrowed to its job's one repository; unknown pairs enqueue nothing. |
 | F-5.4 | Load centrally governed team gate policy | M | planned | Needs owner | Missing or invalid policy fails closed; repository-authored policy cannot override it. |
@@ -174,7 +174,7 @@ Done when: a real team triages findings through the API and dashboard and files 
 
 | ID | Item | Size | Status | Owner | Acceptance |
 |---|---|---|---|---|---|
-| F-6.1 | Upload SARIF to code scanning from the Action | M | planned | Needs owner | Option (b): one mocked upload after a complete scan; exit 2 uploads nothing. |
+| F-6.1 | Upload SARIF to code scanning from the Action | M | planned | Needs owner | If approved: one mocked upload after a complete scan; exit 2 uploads nothing. |
 | F-6.2 | Expose a read-only findings and runs API | M | planned | Needs owner | Missing identity returns 401; a forbidden tenant or role returns 403 without data. |
 | F-6.3 | Export stored findings as SARIF, CSV and JSON | M | planned | Needs owner | Export counts match authorized findings; unauthorized export writes no artifact. |
 | F-6.4 | Show a read-only posture dashboard | M | planned | Needs owner | An API failure shows an error, never a clean posture. |
