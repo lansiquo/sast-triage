@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- **File names in the scanned project could issue GitHub Actions workflow commands from the scan's output; they are now escaped wherever `scan_repo.py` prints them.** A runner reads commands from the output of a step, and `scan_repo.py` and the GitHub Action printed file and folder names as they were, in the report, the gate list, `--json` and the error messages. A pull request could therefore choose a name that added annotations to the run or changed how the rest of the step's log was read. The gate result and the exit status were not affected. Control characters in a name, line breaks included, are now printed as `?`, and the character sequence a runner reads as a command anywhere in a line is broken up; in `--json` it is written with a JSON escape, so the decoded names are unchanged. Error text from git and the scanner is treated the same way, line by line. In the Markdown summary, a name with a backtick, a `|` or a line break can no longer add Markdown of its own under the gate line: those characters become `?` in the list of new P1 findings, as they already did in the list of skipped files, and this also applies to the GitHub App's Check Run summary. Output for names without these characters is unchanged, and so are the SARIF file and every exit status. [W-sast-triage-33] (GHSA-rxm2-9x86-gffq)
 
 ## [2.3.0] - 2026-11-11
 ### Added
