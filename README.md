@@ -1,28 +1,177 @@
 # sast-triage
 
-A Semgrep reviewer for Python, JavaScript and TypeScript, run from the command line, as a GitHub Action
-or as a GitHub App service. It labels each finding **new** or **pre-existing** by comparing the change with
-the code before it, ranks it **P1–P3**, and fails only on new P1 findings, so a pull request is blocked by
-what it introduced, not by what was already there.
+sast-triage runs Semgrep on Python, JavaScript and TypeScript code. For a pull request it labels each
+finding **new** or **pre-existing**, ranks it **P1–P3**, and fails the check only on new P1 findings, so a
+pull request is blocked by what it introduced, not by what was already there.
 
-A Semgrep step in a repository's own CI reports every finding with the same urgency, and the pull request
-can edit that step. `sast-triage` runs 41 service-owned rules for high-signal patterns (`.py`, `.js`,
-`.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`). Rules, ignore files and `nosemgrep` comments from the scanned code
-are not used, and Semgrep never downloads rules. Findings are review aids, not a security audit. Its SCA
-companion, [sca-triage](https://github.com/lansiquo/sca-triage), ranks npm dependency vulnerabilities
-P1–P3 the same way.
+It runs 41 service-owned rules for high-signal patterns (`.py`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`,
+`.tsx`). Rules, ignore files and `nosemgrep` comments from the scanned code are not used, and Semgrep never
+downloads rules. A scan reads source files only: nothing in the project is run or installed. Findings are
+review aids, not a security audit. Its SCA companion,
+[sca-triage](https://github.com/lansiquo/sca-triage), ranks npm dependency vulnerabilities P1–P3 the same
+way.
 
-## Example: OWASP NodeGoat
+## Quick start
 
-I scanned [OWASP NodeGoat](https://github.com/OWASP/NodeGoat), a deliberately vulnerable Express and
-MongoDB app for learning the OWASP Top 10. The results below are from its latest commit, `c5cb68a`
-(June 2023). It needs Python 3.11–3.14. The scan only parses its source; none of NodeGoat's code is
-installed or run. From an empty folder:
+There are three ways to run the same scan: the [GitHub Action](#github-action) in CI, the
+[command line](#command-line), or the command line
+[installed as a package](#install-as-a-package-local-build). A
+[GitHub App](#review-pull-requests-with-a-github-app) service can report the result as a Check Run
+instead.
+
+## GitHub Action
+
+In a workflow that runs on `pull_request`:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0               # the base branch's history, to diff against it
+- uses: lansiquo/sast-triage@v2.6.0
+  with:
+    path: .                      # directory to scan
+    base: ""                     # default: the pull request's base branch; "none" for a full scan
+    timeout: ""                  # scanner time limit in seconds; default: 300
+    sarif: ""                    # also write the findings to this SARIF file; default: no file
+    annotations: "false"         # "true": also annotate the findings on the pull request
+```
+
+All five inputs are optional (defaults shown):
+
+| Input | Default | Meaning |
+|---|---|---|
+| `path` | `.` | Directory to scan |
+| `base` | `""` | Git ref to compare with. Empty: the pull request's base branch, or a full scan on other events. `none`: always a full scan |
+| `timeout` | `""` | Scanner time limit in seconds, passed as `--timeout`. Empty: the default of 300 seconds |
+| `sarif` | `""` | File to also write the findings to, passed as `--sarif`. A relative path is relative to the workspace. Empty: no SARIF file |
+| `annotations` | `"false"` | `"true"` adds `--github-annotations`. Any value other than `"true"` or `"false"`, an empty one included, stops the step with exit status 2 before the scan |
+
+The step fails when the gate fails and adds the summary to the job summary. It installs only
+`requirements-cli.txt` with the runner's Python, and it uses no token and no other actions. Pin a release
+tag such as `@v2.6.0`, or a full commit SHA for the strictest supply-chain safety. A pull request that can
+edit the workflow can edit this step too; the
+[GitHub App](#review-pull-requests-with-a-github-app) runs outside the repository's workflows.
+
+Annotations need no added permission. The Action does not upload the SARIF file: to show the findings in
+GitHub code scanning, upload it in a separate step of your own workflow, pinned to a full commit SHA, in a
+job that has `security-events: write`:
+
+```yaml
+on: pull_request
+jobs:
+  sast-triage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read               # the checkout
+      security-events: write       # the upload step
+      actions: read                # the upload step, only needed in a private repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: rm -rf sast-triage.sarif          # anything already at the path is not this scan's result
+      - id: scan
+        uses: lansiquo/sast-triage@v2.6.0
+        with:
+          sarif: sast-triage.sarif
+      - if: ${{ !cancelled() && steps.scan.outcome != 'skipped' && hashFiles('sast-triage.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066   # v4.39.3
+        with:
+          sarif_file: sast-triage.sarif
+```
+
+The upload never sends a stale file: the `rm` step leaves nothing at the path, and the `if` is false when
+the scan step was skipped or the file is missing (`hashFiles` is then empty), and true after a failed gate
+too. Use a path the repository does not use, since the `rm` step removes whatever is there. Paths in the
+file are relative to `path`; code scanning reads them from the repository root, which is the default
+`path: .`.
+
+## Command line
+
+Requires Python 3.11–3.14.
 
 ```bash
 git clone https://github.com/lansiquo/sast-triage.git
 python3 -m venv sast-venv
 sast-venv/bin/pip install -r sast-triage/requirements-cli.txt
+sast-venv/bin/python sast-triage/scan_repo.py /path/to/project                     # whole project
+sast-venv/bin/python sast-triage/scan_repo.py /path/to/project --base origin/main  # changes since main
+```
+
+`requirements-cli.txt` installs only Semgrep (pinned to the tested 1.79.0) and certifi; set `SEMGREP_BIN`
+to use another Semgrep. A scan needs no GitHub account, token or network.
+
+```text
+scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--sarif FILE] [--timeout SECONDS] [--github-annotations]
+```
+
+| Option | Effect |
+|---|---|
+| none | A full scan: every supported file is scanned and every finding counts as new, also those an existing codebase already had |
+| `--base REF` | Scans only the files changed since the merge base of `REF` and `HEAD`, and labels each finding as for a pull request: see [How triage works](#how-triage-works) |
+| `--json` | Prints the result as JSON instead of the report |
+| `--markdown FILE` | Also writes the Markdown summary to `FILE` |
+| `--timeout SECONDS` | Limits the scan (default: 300 seconds) |
+| `--sarif FILE` | Also writes the findings as a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) file |
+| `--github-annotations` | Also prints, after the report, one GitHub Actions [workflow command](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands) per finding, which GitHub shows as an annotation on the workflow run and on the pull request's files |
+
+The SARIF file and the annotations follow the Check Run's levels: `error` (`::error`) for a new P1,
+`warning` (`::warning`) for a new P2, and `note` (`::notice`) otherwise. Apart from the errors under
+[Exit codes](#exit-codes), neither option changes the exit status or the rest of the output.
+
+**SARIF.** The file has one result per finding, in the same order as `--json`, with the finding's rule ID,
+path, lines, fingerprint, priority, new or pre-existing label and CWE, so GitHub code scanning and other
+SARIF tools can read it. It is written only when the scan issues a result (exit status 0 or 1): a scan
+that stops with exit status 2 writes nothing and leaves an existing file untouched.
+
+**Annotations.** At most 200 commands are printed, P1 first. GitHub itself
+[currently shows](https://github.com/actions/toolkit/blob/main/docs/problem-matchers.md#limitations) no
+more than 10 errors, 10 warnings and 10 notices from one step, so the report above the commands stays the
+full list. `scan_repo.py tests/fixtures/project --github-annotations` ends with one line for each of the
+fixture's two findings. The first:
+
+```text
+::error file=tests/fixtures/project/server.js,line=2,endLine=2,title=[P1%2C new] eval() runs code built at runtime (possible code injection)::eval() runs code built at runtime (possible code injection)%0ARule: js-dangerous-eval, CWE-95
+```
+
+`file` is `DIRECTORY` (in the Action, the `path` input) joined with the finding's path: run the command
+from the repository root, or give an absolute `DIRECTORY`, so the annotations land on the files. Text is
+escaped so that a file name can't add a command of its own;
+[ARCHITECTURE.md](ARCHITECTURE.md#security-controls) says how.
+
+**Skipped files.** A full scan skips files in `.git`, `.hg`, `.svn`, `node_modules`, `vendor`, `dist`,
+`build`, `coverage`, `.venv`, `venv` and `__pycache__` folders, and minified `*.min.js`, `*.min.mjs` and
+`*.min.cjs` files. With `--base`, changed files in `vendor`, `dist`, `build` and `coverage` are scanned
+too, as the GitHub App scans them; changed files it still skips are listed. The project's git diff
+helpers are not used.
+
+## Install as a package (local build)
+
+The command line can also be installed as a `sast-triage` command. The package is not published to PyPI or
+to any other index, so `pip install sast-triage` does not install this project: build the wheel from the
+clone. After the [command line](#command-line) setup:
+
+```bash
+sast-venv/bin/python -m pip install "setuptools>=77.0.3"
+sast-venv/bin/python -m pip wheel --no-deps --no-build-isolation --no-index -w sast-wheel ./sast-triage
+sast-venv/bin/python -m pip install --no-index sast-wheel/sast_triage-*.whl
+sast-venv/bin/sast-triage /path/to/project --base origin/main
+```
+
+`sast-triage` takes the arguments of `python scan_repo.py`, prints the same report and exits with the same
+status; its usage and error text name `sast-triage` instead of `scan_repo.py`. Only the first command
+downloads anything: setuptools, the build backend. The wheel holds only the command line, not the GitHub
+App or its worker, and installs its modules under the names `scan_repo`, `trusted_rules` and `analyzers`,
+so use a virtual environment of its own, as here. [CONTRIBUTING.md](CONTRIBUTING.md#package-build) covers
+the build and `make package-check`, which tests it.
+
+## Example: OWASP NodeGoat
+
+I scanned [OWASP NodeGoat](https://github.com/OWASP/NodeGoat), a deliberately vulnerable Express and
+MongoDB app for learning the OWASP Top 10. The results below are from its latest commit, `c5cb68a`
+(June 2023). After the [command line](#command-line) setup:
+
+```bash
 git clone https://github.com/OWASP/NodeGoat.git
 sast-venv/bin/python sast-triage/scan_repo.py NodeGoat                # whole project
 sast-venv/bin/python sast-triage/scan_repo.py NodeGoat --base HEAD~2  # last two pull requests
@@ -83,223 +232,25 @@ module before it reaches a query is not traced.
 `--base HEAD~2` reviews NodeGoat's last two pull requests the way the gate reviews a pull request:
 `HEAD~2` is the commit just before them. [#233](https://github.com/OWASP/NodeGoat/pull/233) moved the
 tutorial routes out of `app/routes/index.js` into a new `tutorial.js`, and #290 only edited an HTML view.
-The output, without the legend:
+Of the 2 changed files it scans, the report lists:
 
 ```text
-sast-triage scan of NodeGoat, changes since HEAD~2
-A finding is new when it covers a line changed since the base, or was not in the file before; only a new P1 fails.
-2 changed Python, JavaScript and TypeScript files, 41 service-owned rules.
-Skipped: .git, .hg, .svn, .venv, venv, __pycache__, node_modules folders and minified *.min.js files.
-
 Changes since HEAD~2 (2 files): SUCCESS
   [P2, pre-existing] app/routes/index.js:72  js-open-redirect
-### sast-triage — Semgrep summary
-
-**Gate: PASS** — no new P1 findings. Anything else is annotated but doesn't fail the check.
-
-| Priority | New | Pre-existing |
-|---|---|---|
-| P1 | 0 | 0 |
-| P2 | 0 | 1 |
-| P3 | 0 | 0 |
 ```
 
-**Why this passes when the whole-project scan fails.** The gate fails only on a finding that is both new
-and P1, and these pull requests introduced none:
+Its summary reads "**Gate: PASS** — no new P1 findings. Anything else is annotated but doesn't fail the
+check." and counts one pre-existing P2 and nothing else.
+
+**Why this passes when the whole-project scan fails.** These pull requests introduced no new P1:
 
 - The open redirect is in a file #233 changed, but not on a line it changed, so it is pre-existing. It is
   also P2, which never fails the gate.
 - The other nine findings, including all seven P1s, are in files neither pull request touched, so they are
   not scanned.
 
-The seven P1s are still in the project, as the whole-project scan shows. They just aren't these pull
-requests' doing, so they don't block them. The [case study](https://dotrobin.dev/sast-triage.html) shows
-both runs.
-
-## Use it on your project
-
-Requires Python 3.11–3.14. A scan reads source files only: nothing is run or installed, and it needs no
-GitHub account, token or network. `requirements-cli.txt` installs only Semgrep (pinned to the tested
-1.79.0) and certifi; set `SEMGREP_BIN` to use another Semgrep.
-
-```bash
-git clone https://github.com/lansiquo/sast-triage.git
-python3 -m venv sast-venv
-sast-venv/bin/pip install -r sast-triage/requirements-cli.txt
-sast-venv/bin/python sast-triage/scan_repo.py /path/to/project
-sast-venv/bin/python sast-triage/scan_repo.py /path/to/project --base origin/main
-```
-
-```text
-scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--sarif FILE] [--timeout SECONDS] [--github-annotations]
-```
-
-Without `--base`, every supported file is scanned and every finding counts as new, so on an existing
-codebase findings that were already there count too. With `--base REF`, only the files changed since the
-merge base of `REF` and `HEAD` are scanned, and a finding is new when it covers a line they added or
-changed, or when the file didn't have it at the merge base: the same labels a pull request gets. `--json`
-prints the result as JSON, `--markdown FILE` also writes the Markdown summary, and `--timeout` limits the
-scan (default 300 seconds).
-
-`--sarif FILE` also writes the findings as a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/)
-file, one result per finding in the same order as `--json`, carrying each finding's rule ID, path, lines,
-fingerprint, and its priority, new or pre-existing label and CWE. Each result's level follows the Check
-Run: `error` for a new P1, `warning` for a new P2 and `note` otherwise, so the file can be uploaded to
-GitHub code scanning or read by other SARIF tools (uploading is the caller's own step). The file is
-written whenever the scan issues a result (exit 0 or 1), including when the base versions of the changed
-files cannot be scanned and every finding counts as new; a scanner, git or 1 MiB error (exit 2) writes
-nothing and leaves an existing file untouched. `--sarif` changes no exit status or other output.
-
-`--github-annotations` also prints, after the report, one GitHub Actions
-[workflow command](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands)
-per finding, which GitHub shows as an annotation on the workflow run and on the pull request's files.
-`scan_repo.py tests/fixtures/project --github-annotations` ends with:
-
-```text
-::error file=tests/fixtures/project/server.js,line=2,endLine=2,title=[P1%2C new] eval() runs code built at runtime (possible code injection)::eval() runs code built at runtime (possible code injection)%0ARule: js-dangerous-eval, CWE-95
-::warning file=tests/fixtures/project/__tests__/server.test.js,line=2,endLine=2,title=[P2%2C new] eval() runs code built at runtime (possible code injection)::eval() runs code built at runtime (possible code injection)%0ARule: js-dangerous-eval, CWE-95
-```
-
-The level follows the Check Run: `::error` for a new P1, `::warning` for a new P2 and `::notice`
-otherwise. At most 200 commands are printed, P1 first, as the GitHub App annotates. GitHub itself
-[currently shows](https://github.com/actions/toolkit/blob/main/docs/problem-matchers.md#limitations) no
-more than 10 errors, 10 warnings and 10 notices from one step, so the report above the commands stays the
-full list. `file` is `DIRECTORY` joined with the finding's path: run the command from the repository root,
-or give an absolute `DIRECTORY`, so the annotations land on the files. Text is escaped as the runner reads
-it (`%`, carriage return and line feed; in `file` and `title` also `:` and `,`), so a file name can't add a
-command of its own; any other control character prints as `?` and `##[` as `#?[`, as in the report. A
-scan that stops with exit status 2 prints no command, `--github-annotations` with `--json` is a usage
-error (exit status 2), and the flag changes no exit status and nothing else in the output.
-
-A full scan skips files in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv
-folders, and minified `*.min.js` files. With `--base`, changed files in `vendor`, `dist`, `build` and
-`coverage` are scanned too, as the GitHub App scans them; changed files it still skips are listed. A folder
-that can't be read stops the scan with exit status 2. The project's own Semgrep rules, ignore files and git
-diff helpers are not used.
-
-## Install as a package (local build)
-
-The command line can also be built into a wheel and installed. That adds a `sast-triage` command that
-behaves like `python scan_repo.py`: the same arguments, output and exit codes. The package is
-not published to PyPI or to any other index, so `pip install sast-triage` does not install this project:
-build the wheel from a clone. The wheel holds only the command line (`scan_repo.py`, `trusted_rules.py`
-and `analyzers/`), not the GitHub App or its worker.
-
-```bash
-git clone https://github.com/lansiquo/sast-triage.git
-python3 -m venv sast-venv
-sast-venv/bin/python -m pip install -r sast-triage/requirements-cli.txt "setuptools>=77.0.3"
-cd sast-triage
-../sast-venv/bin/python -m pip wheel --no-deps --no-build-isolation --no-index -w ../sast-wheel .
-../sast-venv/bin/python -m pip install --no-index ../sast-wheel/sast_triage-*.whl
-cd ..
-sast-venv/bin/sast-triage /path/to/project
-sast-venv/bin/sast-triage /path/to/project --base origin/main
-```
-
-Only the first `pip install` downloads anything: the pinned Semgrep and certifi, as above, and setuptools,
-the build backend. The build and the install of the wheel are offline (`--no-index`). The build uses the
-setuptools that is already installed, which must be 77.0.3 or later, and fails without it. The install
-succeeds only where Semgrep 1.79.0 and certifi are installed already. Use a virtual environment of its
-own, as above: the wheel installs its modules under the names `scan_repo`, `trusted_rules` and
-`analyzers`. The version in the wheel's name comes from `pyproject.toml`, where it is written by hand;
-between releases it is a development version such as `2.6.0.dev0`. The build leaves `build/` and
-`sast_triage.egg-info/` in the clone, and git ignores both.
-
-`make package-check` repeats this from a development environment that has setuptools 77.0.3 or later:
-it builds the wheel offline from a copy of the checkout in a temporary folder, installs it into a fresh
-virtual environment, and checks that `sast-triage`, run from outside the checkout, scans
-`tests/fixtures/project` with exit status 1 and prints what `python scan_repo.py` prints. It is not part
-of `make check`. `scan_repo.py`, `requirements-cli.txt` and the GitHub Action work as before, with or
-without the package.
-
-## GitHub Action
-
-In a workflow that runs on `pull_request`:
-
-```yaml
-- uses: actions/checkout@v4
-  with:
-    fetch-depth: 0               # the base branch's history, to diff against it
-- uses: lansiquo/sast-triage@v2.6.0
-  with:
-    path: .                      # directory to scan
-    base: ""                     # default: the pull request's base branch; "none" for a full scan
-    timeout: ""                  # scanner time limit in seconds; default: 300
-    sarif: ""                    # also write the findings to this SARIF file; default: no file
-    annotations: "false"         # "true": also annotate the findings on the pull request
-```
-
-All five inputs are optional (defaults shown):
-
-| Input | Default | Meaning |
-|---|---|---|
-| `path` | `.` | Directory to scan |
-| `base` | `""` | Git ref to compare with. Empty: the pull request's base branch, or a full scan on other events. `none`: always a full scan |
-| `timeout` | `""` | Scanner time limit in seconds, passed to `scan_repo.py` as `--timeout`. Empty: its default of 300 seconds |
-| `sarif` | `""` | File to also write the findings to as SARIF 2.1.0, passed to `scan_repo.py` as `--sarif`. A relative path is relative to the workspace. Empty: no SARIF file |
-| `annotations` | `"false"` | `"true"`: also print one workflow command per finding, as `scan_repo.py` does with `--github-annotations`, so the findings show as annotations. Any value other than `"true"` or `"false"` stops the step with exit status 2 |
-
-On a pull request it scans the files changed since the base branch; on other events, or with `base: none`,
-it scans everything. The step fails when the gate fails and adds the summary to the job summary. It
-installs only `requirements-cli.txt` with the runner's Python and uses no other actions. Pin a release tag
-such as `@v2.6.0`, or a full commit SHA for the strictest supply-chain safety.
-
-`timeout: 600` raises the scanner time limit from the default 300 seconds to 600, for a scan too large to
-finish in 300. A value that is not a whole number, such as `timeout: abc`, stops the step with exit status
-2 and no summary, as `scan_repo.py --timeout abc` does.
-
-`sarif: sast-triage.sarif` also writes the findings to `sast-triage.sarif` in the workspace, the file
-`scan_repo.py --sarif` writes. The Action does not upload it: sast-triage itself still uses no token and no
-other actions. To show the findings in GitHub code scanning, upload the file in a separate step of your own
-workflow, pinned to a full commit SHA, in a job that has `security-events: write`. In a private repository
-the upload also needs `actions: read`:
-
-```yaml
-on: pull_request
-jobs:
-  sast-triage:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read               # the checkout
-      security-events: write       # the upload step
-      actions: read                # the upload step, only needed in a private repository
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - run: rm -rf sast-triage.sarif          # anything already at the path is not this scan's result
-      - id: scan
-        uses: lansiquo/sast-triage@v2.6.0
-        with:
-          sarif: sast-triage.sarif
-      - if: ${{ !cancelled() && steps.scan.outcome != 'skipped' && hashFiles('sast-triage.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066   # v4.39.3
-        with:
-          sarif_file: sast-triage.sarif
-```
-
-The file is written only when the scan issues a result (exit status 0 or 1). A scan that stops with exit
-status 2 creates no file and leaves an existing one unchanged. A `sarif` path that can't be written, such
-as one in a folder that does not exist, also stops the step with exit status 2 and no SARIF file. So does
-a value the command line reads as an option, such as `--json`; any other value that is not empty is used
-as the file's path.
-
-The upload step checks for a completed scan, so it never uploads a stale file. The `rm` step leaves nothing
-at the path, so a file is there only when this run's scan exited with status 0 or 1. The step's `if` is
-false when the scan step was skipped or the file is missing (`hashFiles` is then empty), and true after a
-failed gate too. Use a path the repository does not use, since the `rm` step removes whatever is there.
-Paths in the file are relative to `path`; code scanning reads them from the repository root, which is the
-default `path: .`.
-
-`annotations: true` adds `--github-annotations`: after the report, the step prints one workflow command
-per finding, at most 200 and P1 first, and GitHub shows them as annotations on the workflow run and on the
-pull request's files: an error for a new P1, a warning for a new P2 and a notice otherwise. GitHub
-currently shows no more than 10 of each level from one step. This needs no token and no added permission.
-An annotation's file is the `path` input joined with the finding's path, so with `path: services/api` a
-finding in `server.js` is annotated at `services/api/server.js`. The gate, the exit status and the summary
-are the same with and without annotations. The value must be `true` or `false`: any other value, an empty
-one included, stops the step with exit status 2 before the scan, with no summary.
+The seven P1s are still in the project; they just aren't these pull requests' doing. The
+[case study](https://dotrobin.dev/sast-triage.html) shows both runs.
 
 ## How triage works
 
@@ -358,10 +309,10 @@ file's contents or an API's response is not request data.
 data, only the high-severity finding is reported. `py-weak-password-hash` and `js-weak-password-hash`
 (high, CWE-916) flag md5 or sha1 applied to something named like a password, passphrase or secret.
 
-**Python (15 more):** `hashlib.md5` and `sha1` (medium; not with `usedforsecurity=False`); `yaml.load`
-without a safe loader, `yaml.unsafe_load`, `pickle.load` and `pickle.loads`; `os.system`, `os.popen` and
-`subprocess` with `shell=True`; `eval` and `exec`; `requests` with `verify=False`; the `random` module;
-`tempfile.mktemp`; `tarfile.extractall`.
+**Python (15 more).** High: `yaml.load` without a safe loader, `yaml.unsafe_load`, `pickle.load` and
+`pickle.loads`; `os.system`, `os.popen` and `subprocess` with `shell=True`; `eval` and `exec`; `requests`
+with `verify=False`; `tarfile.extractall`. Medium: `hashlib.md5` and `sha1` (not with
+`usedforsecurity=False`); the `random` module; `tempfile.mktemp`.
 
 **JavaScript and TypeScript (14 more):**
 
@@ -385,9 +336,7 @@ without a safe loader, `yaml.unsafe_load`, `pickle.load` and `pickle.loads`; `os
 ## Review pull requests with a GitHub App
 
 The webhook service scans each pull request's head commit and reports the result as a Check Run, with up
-to 200 annotations, P1 first. It needs the full `requirements.txt`, which pins Semgrep 1.79.0:
-newer Semgrep pins `opentelemetry-api` below the version current FastAPI needs, and forcing it would also
-pull in `mcp` and `opentelemetry-api` releases with known advisories.
+to 200 annotations, P1 first. It needs the full `requirements.txt`:
 
 ```bash
 git clone https://github.com/lansiquo/sast-triage.git
@@ -402,19 +351,20 @@ The app reads `.env` only when `PRSEC_LOAD_DOTENV=1`, which `make serve` sets. O
 configuration from the environment. Register your own GitHub App with **pull request** events and Contents
 read, Pull requests read and Checks write. A real webhook creates real Check Runs, so use a test repository.
 
-> **Changed since v1.0.0:** the app reads `.env` only when `PRSEC_LOAD_DOTENV=1`, and the scanner
-> accepts only its own local rule file, so Semgrep registry IDs, `auto` and URLs fail the scan.
-
 This local mode scans in the web process, two at a time. The durable mode (SQLite queue, separate worker,
 rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy/README.md).
 
 ## Exit codes
 
-| Code | `scan_repo.py` and the GitHub Action |
+| Code | `scan_repo.py`, `sast-triage` and the GitHub Action |
 |---|---|
 | 0 | The gate passes: no new P1 finding, or nothing to scan |
 | 1 | The gate fails: at least one new P1 finding |
-| 2 | Usage, git or scanner error, such as a missing directory, a `--base` ref that is not a commit in the checkout or has no merge base with `HEAD` (the error says what to fetch), a folder that can't be read, a file over 1 MiB, an incomplete scan, a `--sarif` destination that can't be written, `--github-annotations` with `--json` or an `annotations` input that is not `true` or `false`; no result is issued |
+| 2 | Usage, git or scanner error, such as a missing directory, a `--timeout` that is not a whole number, `--github-annotations` with `--json`, a `--base` ref that is not a commit in the checkout or has no merge base with `HEAD` (the error says what to fetch), a folder that can't be read, an incomplete scan or a `--sarif` destination that can't be written |
+
+With exit status 2 no result is issued: no report or workflow command is printed, and the Action adds no
+summary. One case differs: when only the SARIF file can't be written, the `--markdown` summary, which the
+Action shows as its job summary, is already written.
 
 ## Scope and limits
 
@@ -424,14 +374,15 @@ rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy
   the lines it covers. Only changed files are scanned, so a change in one file can't raise a finding in
   another that it didn't touch.
 - **Size limits fail closed:** 1 MiB per scanned file; for the GitHub App also a 1 MiB webhook body,
-  3,000 changed files and 500 changed Python, JavaScript and TypeScript files per pull request. The App
-  downloads only those files, so the size of the repository doesn't matter.
+  fewer than 3,000 changed files and at most 500 changed Python, JavaScript and TypeScript files per pull
+  request. The App downloads only those files, so the size of the repository doesn't matter.
 - **Local mode is not an OS sandbox.** It strips credentials from the scanner and stages only the selected
   files. Before scanning untrusted public repositories, use the durable mode's isolated worker.
 
 ## More
 
+- [CHANGELOG.md](CHANGELOG.md): what changed in each release
 - [ARCHITECTURE.md](ARCHITECTURE.md): components, execution modes, failure handling and security controls, with a diagram
 - [SECURITY.md](SECURITY.md): trust boundaries and remaining risks
-- [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests and repository layout
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests, the package build and repository layout
 - [Case study](https://dotrobin.dev/sast-triage.html): design and runs on OWASP NodeGoat

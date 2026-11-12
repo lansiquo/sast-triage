@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- **The README said the installed `sast-triage` command has the same output as `python scan_repo.py`, repeated release notes and stated several facts more than once; it is now ordered for a new user, and every statement was checked against 2.6.0.** Documentation only. The README opens with what sast-triage does, then shows the GitHub Action, the command line and the local package, then the NodeGoat example, triage, the rules, the GitHub App, exit codes and limits. For example, "Install as a package (local build)" is now four commands, and says that the usage and error text of the installed command name `sast-triage` instead of `scan_repo.py`. The build details and `make package-check` moved to `CONTRIBUTING.md`, whose layout table now lists `pyproject.toml`, `docs/decisions/` and `docs/go-live-checklist.md`, and how workflow commands are escaped moved to `ARCHITECTURE.md`. No code, scan result or exit status (0, 1 and 2) changes. [W-sast-triage-53]
 
 ## [2.6.0] - 2026-11-12
 ### Added
