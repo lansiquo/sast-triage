@@ -168,13 +168,25 @@ In a workflow that runs on `pull_request`:
   with:
     path: .                      # directory to scan
     base: ""                     # default: the pull request's base branch; "none" for a full scan
+    timeout: ""                  # scanner time limit in seconds; default: 300
 ```
 
-Both inputs are optional (defaults shown). On a pull request it scans the files changed since the base
-branch; on other events, or with `base: none`, it scans everything. The step fails when the gate fails and
-adds the summary to the job summary. It installs only `requirements-cli.txt` with the runner's Python and
-uses no other actions. Pin a release tag such as `@v2.2.1`, or a full commit SHA for the strictest
-supply-chain safety.
+All three inputs are optional (defaults shown):
+
+| Input | Default | Meaning |
+|---|---|---|
+| `path` | `.` | Directory to scan |
+| `base` | `""` | Git ref to compare with. Empty: the pull request's base branch, or a full scan on other events. `none`: always a full scan |
+| `timeout` | `""` | Scanner time limit in seconds, passed to `scan_repo.py` as `--timeout`. Empty: its default of 300 seconds |
+
+On a pull request it scans the files changed since the base branch; on other events, or with `base: none`,
+it scans everything. The step fails when the gate fails and adds the summary to the job summary. It
+installs only `requirements-cli.txt` with the runner's Python and uses no other actions. Pin a release tag
+such as `@v2.2.1`, or a full commit SHA for the strictest supply-chain safety.
+
+`timeout: 600` raises the scanner time limit from the default 300 seconds to 600, for a scan too large to
+finish in 300. A value that is not a whole number, such as `timeout: abc`, stops the step with exit status
+2 and no summary, as `scan_repo.py --timeout abc` does.
 
 ## How triage works
 
