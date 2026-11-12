@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [2.2.0] - 2026-11-11
 ### Added
 - **Write findings as SARIF 2.1.0 (`scan_repo.py DIR --sarif FILE`).** Serializes the same triaged findings as `--json` into a SARIF 2.1.0 file (one run, `tool.driver.name` `sast-triage`), one result per finding in the same order, each with its rule ID, forward-slash path, `region.startLine`/`endLine`, a `partialFingerprints.fingerprint`, and `properties` for `priority`, `new`, `new_because` and `cwe`. A result's `level` follows the Check Run annotations: `error` for a new P1, `warning` for a new P2, `note` otherwise; with `--base`, `properties.new` marks each finding new or pre-existing. For example, `scan_repo.py app --base origin/main --sarif out.sarif` writes a file that can be uploaded to GitHub code scanning. The file is written whenever the scan issues a result (exit 0 or 1), including the base-version fallback where every finding counts as new; a scanner, git or 1 MiB error (exit 2) writes nothing and leaves an existing file unchanged, and an unwritable destination exits 2 with no partial file. `--sarif` changes no exit status and no console, `--json` or `--markdown` output. (F-1.1)
 
