@@ -82,6 +82,7 @@ flowchart TD
 - Scanner: exactly one absolute, local rule file outside the scanned tree (no `auto`, registry IDs or URLs), metrics and version checks off, inline suppression disabled, one job, 1 MiB per file, bounded output and timeout.
 - Docker sandbox: `--pull=never`, `--network=none`, `--read-only`, `--cap-drop=ALL`, `no-new-privileges`, UID/GID 65532, 1 CPU, 768 MiB memory and swap, 128 PIDs, read-only mounts for the staged files and rules; container removal is confirmed after every scan.
 - Logs carry job ids, status codes and exception types, never tokens, payloads or response bodies.
+- Workflow commands (`scan_repo.py --github-annotations`): text is escaped as the runner reads it (`%`, carriage return and line feed; in `file` and `title` also `:` and `,`), so a file name can't add a command of its own; any other control character prints as `?` and `##[` as `#?[`, as in the report.
 
 ## Out of scope
 
