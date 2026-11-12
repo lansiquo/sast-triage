@@ -131,7 +131,7 @@ sast-venv/bin/python sast-triage/scan_repo.py /path/to/project --base origin/mai
 ```
 
 ```text
-scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--timeout SECONDS]
+scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--sarif FILE] [--timeout SECONDS]
 ```
 
 Without `--base`, every supported file is scanned and every finding counts as new, so on an existing
@@ -140,6 +140,14 @@ merge base of `REF` and `HEAD` are scanned, and a finding is new when it covers 
 changed, or when the file didn't have it at the merge base: the same labels a pull request gets. `--json`
 prints the result as JSON, `--markdown FILE` also writes the Markdown summary, and `--timeout` limits the
 scan (default 300 seconds).
+
+`--sarif FILE` also writes the findings as a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/)
+file, one result per finding in the same order as `--json`, carrying each finding's rule ID, path, lines,
+fingerprint, and its priority, new or pre-existing label and CWE. Each result's level follows the Check
+Run: `error` for a new P1, `warning` for a new P2 and `note` otherwise, so the file can be uploaded to
+GitHub code scanning or read by other SARIF tools (uploading is the caller's own step). The file is
+written only after a complete scan: a scanner, git or 1 MiB error writes nothing and leaves an existing
+file untouched, and `--sarif` changes no exit status or other output.
 
 A full scan skips files in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv
 folders, and minified `*.min.js` files. With `--base`, changed files in `vendor`, `dist`, `build` and
@@ -280,7 +288,7 @@ rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy
 |---|---|
 | 0 | The gate passes: no new P1 finding, or nothing to scan |
 | 1 | The gate fails: at least one new P1 finding |
-| 2 | Usage, git or scanner error, such as a missing directory, an unknown `--base` ref, a folder that can't be read, a file over 1 MiB or an incomplete scan; no result is issued |
+| 2 | Usage, git or scanner error, such as a missing directory, an unknown `--base` ref, a folder that can't be read, a file over 1 MiB, an incomplete scan or a `--sarif` destination that can't be written; no result is issued |
 
 ## Scope and limits
 
