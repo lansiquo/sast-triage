@@ -4,6 +4,8 @@ import subprocess
 
 import pytest
 
+import app
+import scan_repo
 from analyzers import semgrep_runner as runner
 from test_error_paths import case
 
@@ -61,6 +63,52 @@ def test_timeouts_and_untrustworthy_output_are_scanner_errors(tmp_path, monkeypa
                                        (clean(), 1, 'contradicts')):
         with case(reason), pytest.raises(runner.SemgrepInvocationError, match=reason):
             scan(tmp_path, monkeypatch, output, returncode)
+
+
+# A coverage report ("paths") the scanner could send in place of {"scanned": [every staged file]}.
+NOT_AN_OBJECT = {'null': None, 'list': ['main.py'], 'string': 'main.py', 'number': 7}
+NO_FILE_LIST = {'empty object': {}, 'scanned null': {'scanned': None}, 'scanned string': {'scanned': 'main.py'},
+                'scanned object': {'scanned': {'main.py': True}}, 'scanned mixed list': {'scanned': ['main.py', 7]}}
+
+
+def fake_scanner(monkeypatch, paths):
+    """Make the scanner process answer with a clean result whose coverage report is `paths`."""
+    monkeypatch.setattr(runner, '_ensure_semgrep_available', lambda: '/fake/semgrep')
+    monkeypatch.setattr(runner, '_bounded_container_run', lambda *a, **k: subprocess.CompletedProcess(
+        [], 0, json.dumps({**clean(), 'paths': paths}), ''))
+
+
+@pytest.mark.parametrize('paths', [*NOT_AN_OBJECT.values(), *NO_FILE_LIST.values()],
+                         ids=[*NOT_AN_OBJECT, *NO_FILE_LIST])
+def test_a_malformed_coverage_report_is_a_scanner_error(tmp_path, monkeypatch, paths):
+    with pytest.raises(runner.SemgrepInvocationError, match='Scanner did not report target coverage') as error:
+        scan(tmp_path, monkeypatch, {**clean(), 'paths': paths})
+    assert error.value.exit_code == 65
+
+
+@pytest.mark.parametrize('paths', NOT_AN_OBJECT.values(), ids=NOT_AN_OBJECT)
+def test_command_line_exits_with_two_on_a_malformed_coverage_report(tmp_path, monkeypatch, capsys, paths):
+    (tmp_path / 'main.py').write_text('print(1)\n')
+    fake_scanner(monkeypatch, paths)
+    assert scan_repo.main([str(tmp_path)]) == 2   # not a traceback, which exits with 1 like a failed gate
+    captured = capsys.readouterr()
+    assert 'scan incomplete, no result issued' in captured.err
+    assert 'Scanner did not report target coverage' in captured.err
+    assert 'Traceback' not in captured.err and 'Gate' not in captured.out
+
+
+@pytest.mark.parametrize('paths', NOT_AN_OBJECT.values(), ids=NOT_AN_OBJECT)
+def test_app_check_fails_as_a_scanner_error_on_a_malformed_coverage_report(tmp_path, monkeypatch, paths):
+    (tmp_path / 'main.py').write_text('print(1)\n')
+    fake_scanner(monkeypatch, paths)
+    monkeypatch.setattr(app, 'MODE', 'local')
+    monkeypatch.setattr(app, 'list_changed_files', lambda *a: {'main.py': {1}})
+    monkeypatch.setattr(app, 'fetch_files', lambda *a: tmp_path)
+    completed = []
+    monkeypatch.setattr(app, 'complete_check_run', lambda *a: completed.append(a))
+    outcome = app.run_semgrep_pipeline('o', 'r', 'o', 'r', 1, 'a' * 40, 1, 'o', 'r', 99, 'fake')
+    assert outcome == {'conclusion': 'failure', 'scan_error': 'SemgrepInvocationError'}
+    assert len(completed) == 1 and completed[0][3] == 'failure' and 'Scan incomplete' in completed[0][5]
 
 
 def test_empty_request_and_non_file_targets(tmp_path, monkeypatch):

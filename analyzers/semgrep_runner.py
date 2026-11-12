@@ -242,7 +242,8 @@ def run_semgrep(
             raise SemgrepInvocationError(65, cmd, "", "Incomplete or invalid scanner output")
         if proc.returncode == 1 and not data["results"]:
             raise SemgrepInvocationError(65, cmd, "", "Scanner exit status contradicts empty findings")
-        scanned = data.get("paths", {}).get("scanned")
+        coverage = data.get("paths")
+        scanned = coverage.get("scanned") if isinstance(coverage, dict) else None
         if not isinstance(scanned, list) or not all(isinstance(name, str) for name in scanned):
             raise SemgrepInvocationError(65, cmd, "", "Scanner did not report target coverage")
         scanned_paths = {str(Path(name)) for name in scanned}
