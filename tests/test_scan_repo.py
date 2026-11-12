@@ -502,3 +502,40 @@ def test_sarif_unwritable_destination_exits_two_without_a_partial_artifact(tmp_p
     captured = capsys.readouterr()
     assert captured.out == '' and 'could not write the SARIF file' in captured.err
     assert not target.exists() and not target.parent.exists()
+
+
+def test_sarif_is_written_when_only_the_base_version_scan_fails(tmp_path, monkeypatch, capsys):
+    # When only the base-version scan fails, the CLI warns, counts every finding as new and still
+    # issues a result (exit 1). AC7 forbids --sarif from changing the exit status, so FILE must be
+    # written and mirror --json, whether the destination is fresh or already exists.
+    root = repository(tmp_path)
+    real, calls = scan_repo.run_semgrep, []
+    def head_only(paths, repo_root, **options):
+        calls.append(repo_root)
+        if len(calls) > 1:                                  # the second scan is the base versions
+            raise runner.SemgrepInvocationError(2, ['semgrep'], '', 'the old version does not parse')
+        return real(paths, repo_root, **options)
+    monkeypatch.setattr(scan_repo, 'run_semgrep', head_only)
+
+    # same exit status with and without --sarif, and --json output is unchanged
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1
+    without = json.loads(capsys.readouterr().out)
+    calls.clear()
+    fresh = tmp_path / 'fresh.sarif'
+    assert scan_repo.main([str(root), '--base', 'main', '--json', '--sarif', str(fresh)]) == 1
+    with_sarif = json.loads(capsys.readouterr().out)
+    assert with_sarif == without
+    assert with_sarif['findings'] and all(f['new'] for f in with_sarif['findings'])   # the fallback: every finding new
+
+    results = json.loads(fresh.read_text())['runs'][0]['results']
+    assert [r['ruleId'] for r in results] == [f['rule_id'] for f in with_sarif['findings']]
+    assert all(r['properties']['new'] is True for r in results)
+
+    # a pre-existing destination is overwritten with the issued result, not left stale
+    existing = tmp_path / 'old.sarif'
+    existing.write_bytes(b'OLD')
+    calls.clear()
+    assert scan_repo.main([str(root), '--base', 'main', '--sarif', str(existing)]) == 1
+    capsys.readouterr()
+    overwritten = json.loads(existing.read_text())['runs'][0]['results']
+    assert [r['ruleId'] for r in overwritten] == [f['rule_id'] for f in with_sarif['findings']]

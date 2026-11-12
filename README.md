@@ -146,8 +146,9 @@ file, one result per finding in the same order as `--json`, carrying each findin
 fingerprint, and its priority, new or pre-existing label and CWE. Each result's level follows the Check
 Run: `error` for a new P1, `warning` for a new P2 and `note` otherwise, so the file can be uploaded to
 GitHub code scanning or read by other SARIF tools (uploading is the caller's own step). The file is
-written only after a complete scan: a scanner, git or 1 MiB error writes nothing and leaves an existing
-file untouched, and `--sarif` changes no exit status or other output.
+written whenever the scan issues a result (exit 0 or 1), including when the base versions of the changed
+files cannot be scanned and every finding counts as new; a scanner, git or 1 MiB error (exit 2) writes
+nothing and leaves an existing file untouched. `--sarif` changes no exit status or other output.
 
 A full scan skips files in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv
 folders, and minified `*.min.js` files. With `--base`, changed files in `vendor`, `dist`, `build` and
