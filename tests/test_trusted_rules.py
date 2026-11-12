@@ -1,5 +1,6 @@
 """Live Semgrep checks for the service-owned rules. Every snippet is its own file in one scan; nothing is executed."""
 import difflib
+import re
 from pathlib import Path
 
 import pytest
@@ -384,6 +385,30 @@ def test_ruleset_counts_and_metadata():
             assert rule['metadata']['owasp'].endswith(':2021'), rule['id']
     readme = (Path(__file__).resolve().parent.parent / 'README.md').read_text()
     assert '41 service-owned rules' in readme
+
+
+def documented(name, sentence):
+    """The numbers one sentence of a document states, in order ('Eight' reads as 8)."""
+    words = ('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen '
+             'sixteen seventeen eighteen nineteen twenty').split()
+    match = re.search(sentence, (Path(__file__).resolve().parent.parent / name).read_text())
+    assert match, f'{name} no longer has the sentence that states these rule counts'
+    return [words.index(number.lower()) if number.lower() in words else int(number) for number in match.groups()]
+
+
+def test_documented_rule_counts_match_the_ruleset():
+    taint = sorted(rule['id'] for rule in RULES if rule.get('mode') == 'taint')
+    stated = {
+        'README.md': documented(
+            'README.md', r'holds all (\w+) service-owned rules\.[^|]*\((\w+) rules, Semgrep taint mode\)'),
+        'ARCHITECTURE.md': documented(
+            'ARCHITECTURE.md', r'The (\w+) service-owned rules: (\w+) Python, (\w+) JavaScript and TypeScript\. '
+                               r'(\w+) follow request data [^|]*\(Semgrep taint mode'),
+    }
+    assert stated == {
+        'README.md': [len(RULES), len(taint)],
+        'ARCHITECTURE.md': [len(RULES), len(PYTHON_RULES), len(JAVASCRIPT_RULES), len(taint)],
+    }, f'the taint-mode rules are {taint}'
 
 
 def test_every_rule_has_positive_and_negative_examples(tmp_path, monkeypatch):

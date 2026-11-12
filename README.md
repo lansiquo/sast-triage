@@ -297,7 +297,7 @@ only a complete scan can pass.
 
 `trusted_rules.py` holds all 41 service-owned rules. Rule severity ERROR is high and WARNING is medium.
 
-**Request data reaching a dangerous call** (12 rules, Semgrep taint mode). They follow data from the
+**Request data reaching a dangerous call** (8 rules, Semgrep taint mode). They follow data from the
 request (Flask and Django `request.args`, `form`, `json`, `GET`, `POST`, cookies and headers; Express
 `req.query`, `body`, `params`, cookies and headers) through assignments, concatenation, formatting and
 calls such as `os.path.join` and `path.join`, within one function:
