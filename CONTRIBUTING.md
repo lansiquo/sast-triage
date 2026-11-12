@@ -55,6 +55,6 @@
 | `tests/` | Offline regression suite; `tests/fixtures/project` is the `make selfcheck` fixture, and `tests/package_check.py` runs only as `make package-check` |
 | `deploy/` | Prepared deployment design, runbooks and evidence |
 | `docs/branch-protection/` | Branch protection that makes the check required, for a repository that uses the App |
-| `docs/decisions/` | Decision records, one numbered file each: hosting and trust, and the durable-mode scanner |
+| `docs/decisions/` | Decision records, one numbered file per decision |
 | `docs/go-live-checklist.md` | The evidence checklist for a durable-mode deployment; every row starts as `NOT_RUN` |
 | `.github/workflows/ci.yml` | `make check` on Python 3.11–3.14, and the GitHub Action self-test |
