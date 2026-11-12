@@ -1,0 +1,40 @@
+# The command line (scan_repo.py) as an installable package with a `sast-triage` command.
+# It is built locally and is not published to PyPI: see README "Install as a package (local build)".
+# setuptools is the only build requirement. From 77.0.3 it builds the wheel without the `wheel`
+# package and reads the SPDX license below.
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sast-triage"
+# Written here by hand, with no version automation: a development release of the next version.
+# A release sets its final number on this line.
+version = "2.6.0.dev0"
+description = "Semgrep review for Python, JavaScript and TypeScript: labels findings new or pre-existing, ranks them P1-P3 and fails only on new P1 findings."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Robin Lansiquot" }]
+# Exactly the lines of requirements-cli.txt (tests/test_packaging.py compares them).
+dependencies = [
+    "semgrep==1.79.0",
+    "certifi>=2024.2.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/lansiquo/sast-triage"
+Repository = "https://github.com/lansiquo/sast-triage"
+Changelog = "https://github.com/lansiquo/sast-triage/blob/main/CHANGELOG.md"
+Issues = "https://github.com/lansiquo/sast-triage/issues"
+
+[project.scripts]
+sast-triage = "scan_repo:main"
+
+# Only what the command line imports: not the GitHub App, the worker, deploy/ or the tests.
+# The rules are a string in trusted_rules.py, so there are no data files to include.
+[tool.setuptools]
+py-modules = ["scan_repo", "trusted_rules"]
+packages = ["analyzers"]
+include-package-data = false

@@ -18,3 +18,9 @@ venv/
 /data/
 *.sqlite3*
 deploy/*.env
+
+# Output of a local package build (README "Install as a package (local build)"), at the root only:
+# folders named build or dist elsewhere, such as in a test project, stay visible to git.
+/build/
+/dist/
+/*.egg-info/

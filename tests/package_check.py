@@ -7,8 +7,8 @@ downloads nothing, so it fails in an environment without one.
 The wheel is built from a copy of the checkout in a temporary folder, with
 `python -m pip wheel --no-deps --no-build-isolation --no-index`, and installed into a fresh virtual
 environment there. That environment gets Semgrep from the environment running the check, through a
-.pth file, because it cannot download its own. Nothing is written to the checkout, and the temporary
-folder is removed at the end.
+.pth file, because it cannot download its own. Nothing is written to the checkout or to the
+environment running the check, and the temporary folder is removed at the end.
 """
 import json
 import os
@@ -77,9 +77,13 @@ def package():
         assert purelib.returncode == 0, purelib.stderr
         Path(purelib.stdout.strip(), 'environment_with_semgrep.pth').write_text(
             '\n'.join(site.getsitepackages()) + '\n', encoding='utf-8')
-        # Without --no-deps: pip accepts the wheel only if its dependencies are installed already.
-        installed = run([sys.executable, '-m', 'pip', '--python', python, 'install', '--no-index', wheels[0]],
-                        outside, env)
+        pip = [sys.executable, '-m', 'pip', '--python', python, 'install', '--no-index']
+        # A dry run with dependencies: pip accepts the wheel only where they are installed already.
+        resolved = run([*pip, '--dry-run', wheels[0]], outside, env)
+        assert resolved.returncode == 0, resolved.stdout + resolved.stderr
+        # The install itself looks at no other package, so it only ever writes to the new environment,
+        # also when the environment running the check has a sast-triage of its own installed.
+        installed = run([*pip, '--no-deps', '--ignore-installed', wheels[0]], outside, env)
         assert installed.returncode == 0, installed.stdout + installed.stderr
 
         # The scan finds the semgrep launcher beside its interpreter or on PATH: here, the one of this environment.
@@ -170,6 +174,6 @@ def test_installed_command_keeps_exit_0_for_a_passing_gate_and_exit_2_for_an_err
     script = run([sys.executable, ROOT / 'scan_repo.py', tmp_path / 'missing'], ROOT, package.env)
     assert missing.returncode == script.returncode == 2
     assert missing.stdout == script.stdout == ''
-    assert 'not a directory' in missing.stderr
-    # Only the program name differs: argparse takes it from the command that was run.
-    assert missing.stderr == script.stderr.replace('scan_repo.py', 'sast-triage')
+    # Only the program name differs (and with it where the usage text wraps): argparse takes it from the command.
+    assert missing.stderr.splitlines()[-1] == f"sast-triage: error: not a directory: {tmp_path / 'missing'}"
+    assert script.stderr.splitlines()[-1] == f"scan_repo.py: error: not a directory: {tmp_path / 'missing'}"
