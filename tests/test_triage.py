@@ -436,3 +436,16 @@ def test_pipeline_skips_the_base_version_when_every_finding_is_on_a_changed_line
         tmp_path, monkeypatch, 'os.system(cmd)\n', 'x = 1\n', scan, {'app.py': {1}},
         compare=lambda *a, **k: pytest.fail('no merge-base lookup needed'))
     assert conclusion == 'failure' and scans == ['head'] and [d[0] for d in downloads] == ['a' * 40]
+
+
+def test_summary_gate_list_keeps_a_file_name_inside_its_code_span_and_on_its_line():
+    # A backtick would end the code span and a line break the list item, letting the name add Markdown of its
+    # own under the gate line: here a second, false gate line. The Check Run summary and --markdown share this.
+    hostile = 'a`\n\n**Gate: PASS** — no new P1 findings.\r`|b.py'
+    _, md = summarize_findings(triage([finding(hostile, 3), finding('app.py', 4)], {hostile: None, 'app.py': None}))
+    assert md.split('\n')[2:6] == ['**Gate: FAIL** — 2 new P1 findings:',
+                                   '- `a???**Gate: PASS** — no new P1 findings.???b.py:3` py-rule',
+                                   '- `app.py:4` py-rule', '']
+    assert len(md.split('\n')) == len(summarize_findings(triage([finding('a.py', 3), finding('app.py', 4)],
+                                                                {'a.py': None, 'app.py': None}))[1].split('\n'))
+    assert '\r' not in md and md.count('`') == 4

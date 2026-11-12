@@ -59,6 +59,35 @@ def _status_line(f: Dict[str, Any]) -> str:
     return "Status: new (treat it as introduced by this pull request)"
 
 
+def is_utf8_name(path: str) -> bool:
+    """Whether the file's name on disk is exactly the UTF-8 encoding of `path`.
+
+    Semgrep reports a file with any other name as scanned without matching a
+    rule against it, so its coverage report proves nothing for such a file.
+    Python reads a name that is not valid UTF-8 with surrogate escapes, which
+    UTF-8 cannot encode; in a locale that is not UTF-8, every non-ASCII name
+    differs from its UTF-8 encoding.
+    """
+    try:
+        return os.fsencode(path) == path.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+
+
+def ascii_name(name) -> str:
+    """A file name (text, or the bytes git lists) spelled in ASCII for an error message.
+
+    Every byte other than a letter, a digit, space, ".", "_", "-" and "/" is
+    written as \\xNN, so no name can break a line or start a GitHub workflow command.
+    """
+    if isinstance(name, str):
+        try:
+            name = os.fsencode(name)
+        except UnicodeEncodeError:
+            name = name.encode("utf-8", "surrogatepass")
+    return re.sub(rb"[^A-Za-z0-9 ._/-]", lambda byte: b"\\x%02x" % byte.group()[0], name).decode("ascii")
+
+
 @dataclass
 class SemgrepInvocationError(Exception):
     exit_code: int
@@ -120,6 +149,9 @@ def run_semgrep(
     rel_paths: List[str] = []
     seen = set()
     for p in paths:
+        if not is_utf8_name(p):
+            # Semgrep would list this file as scanned and match nothing in it, so the scan stops here.
+            raise SemgrepInvocationError(65, [semgrep_bin], "", f"File name is not valid UTF-8: {ascii_name(p)}")
         candidate = (Path(repo_root) / p).resolve()
         if Path(p).is_absolute() or not candidate.is_relative_to(Path(repo_root).resolve()):
             raise ValueError("Unsafe scan path")
@@ -308,8 +340,11 @@ def summarize_findings(findings: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[s
     new_p1 = [f for f in findings if f["new"] and f["priority"] == "P1"]
     if new_p1:
         plural = "" if len(new_p1) == 1 else "s"
+        # A file name must not end its code span or its line, and so add Markdown of its own under the
+        # gate line: the same characters are replaced as in scan_repo.skipped_note().
         gate_lines = [f"**Gate: FAIL** — {len(new_p1)} new P1 finding{plural}:",
-                      *(f"- `{f['path']}:{f['start_line']}` {f['rule_id']}" for f in new_p1[:10])]
+                      *("- `" + re.sub(r"[\x00-\x1f`|]", "?", f["path"]) + f":{f['start_line']}` {f['rule_id']}"
+                        for f in new_p1[:10])]
         if len(new_p1) > 10:
             gate_lines.append(f"- and {len(new_p1) - 10} more")
     else:
