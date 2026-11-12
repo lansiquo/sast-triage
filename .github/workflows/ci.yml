@@ -44,3 +44,35 @@ jobs:
           base: none
       - name: The planted P1 must fail the gate
         run: test "${{ steps.scan.outcome }}" = failure
+
+  # Scans this repository's code with the released sast-triage, pinned to its commit. On a pull
+  # request the Action compares with the base branch and fails only on a new P1 finding. On a push to
+  # main it scans the whole tree, where every finding counts as new.
+  sast-triage:
+    name: sast-triage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the base branch's history, which the pull request scan compares with
+      - name: Scan the code with sast-triage
+        uses: lansiquo/sast-triage@87fede70bba02341afed8c6a6688f50dd1c622b4 # v2.6.0
+
+  # Builds the package offline and installs it. The build needs setuptools 77.0.3 or later, which
+  # requirements.txt does not install, so this job installs it.
+  package:
+    name: make package-check (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt "setuptools>=77.0.3"
+      - run: make package-check
