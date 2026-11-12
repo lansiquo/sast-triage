@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **Record the hosting and trust decision for the live deployment (`docs/decisions/0001-hosting-and-trust.md`).** Documentation only. The durable-mode GitHub App service will run self-hosted on one dedicated Linux VM, separate from other workloads, and not as a hosted multi-tenant service. The record answers each trust question with a yes or a no: no inbound ports, exactly one HTTPS webhook endpoint reached through an outbound tunnel, the webhook secret and the App private key only in the host's secret store, the webhook secret readable only by the web listener's account and the private key only by the worker's account, and the App installation narrowed to the repositories it scans. It also lists what still needs a separate owner approval (provisioning, tunnel setup, credential moves, App setting changes and network changes) and the statements in `deploy/` that differ from the decision and are left as follow-up items. Nothing is deployed, and no code, scan result or exit status (0, 1 and 2) changes. (F-2.1)
 
 ## [2.5.0] - 2026-11-12
 ### Added
