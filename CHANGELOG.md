@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- **A source file whose name is not valid UTF-8 could pass the gate without being checked; such a name now stops the scan with exit status 2, and no result is issued.** Semgrep lists a file with such a name as scanned but matches no rule against it, so a full `scan_repo.py` scan reported no finding in the file and could exit with status 0, and a `--base` scan stopped with a Python traceback and exit status 1 instead of a scan error. Full scans, `--base` scans and the scanner wrapper that the GitHub App shares now refuse such a name before Semgrep runs. The error names each file in ASCII, with every byte other than a letter, a digit, space, `.`, `_`, `-` and `/` written as `\xNN`, and no `--json`, `--markdown` or `--sarif` output is written. A `--base` scan refuses any changed name that is not valid UTF-8 (a source file or not), reads the other names exactly as git lists them, and exits with status 2 on any other git output that is not valid UTF-8, such as the diff of a file in another encoding, which used to end in a traceback too. Names that are valid UTF-8, such as `café.py` and `src dir/sample.py`, are scanned as before; in a locale that is not UTF-8, where Semgrep misses every non-ASCII name the same way, every non-ASCII name is refused. [W-sast-triage-22] (GHSA-q6g3-2w87-rg5h)
 
 ## [2.3.0] - 2026-11-11
 ### Added
