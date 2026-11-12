@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **Give a GitHub Action scan more time (`timeout` input).** `action.yml` has a new optional `timeout` input: the scanner time limit in seconds, which the Scan step passes to `scan_repo.py` as `--timeout`. For example, `timeout: 600` runs the scan with `--timeout 600`, so a large scan that stopped with exit status 2 at the default 300 seconds gets 600. Left empty (the default, `""`), the step runs `scan_repo.py` with the same arguments as before. A value that is not a whole number, such as `timeout: abc`, stops the step with exit status 2 and no summary, as `scan_repo.py --timeout abc` does. Like `path` and `base`, the input reaches the step's script only through an environment variable, and it changes neither the base arguments nor the gate result. (F-1.3)
 
 ## [2.2.1] - 2026-11-11
 ### Changed

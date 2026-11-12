@@ -14,6 +14,12 @@ inputs:
       scan (every finding new) otherwise; "none" always runs a full scan. Needs the base's history:
       check out with fetch-depth 0.
     default: ""
+  timeout:
+    description: >-
+      Scanner time limit in seconds, a whole number, passed to scan_repo.py as --timeout. Empty keeps
+      its default of 300 seconds. A value that is not a whole number stops the step with exit status 2
+      and no result.
+    default: ""
 runs:
   using: composite
   steps:
@@ -28,12 +34,14 @@ runs:
       env:
         SAST_PATH: ${{ inputs.path }}
         SAST_BASE: ${{ inputs.base }}
+        SAST_TIMEOUT: ${{ inputs.timeout }}
       run: |
         base="$SAST_BASE"
         if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then base="origin/$GITHUB_BASE_REF"; fi
         if [ "$base" = "none" ]; then base=""; fi
         args=("$SAST_PATH" --markdown "$RUNNER_TEMP/sast-triage.md")
         if [ -n "$base" ]; then args+=(--base "$base"); fi
+        if [ -n "$SAST_TIMEOUT" ]; then args+=(--timeout "$SAST_TIMEOUT"); fi
         rm -f "$RUNNER_TEMP/sast-triage.md"
         set +e
         "$RUNNER_TEMP/sast-triage-venv/bin/python" "$GITHUB_ACTION_PATH/scan_repo.py" "${args[@]}"

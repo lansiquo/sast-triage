@@ -67,7 +67,7 @@ Goal: Users can export SARIF, diagnose missing base history and use the existing
 
 ### F-1.3 Action input for the scan time limit
 
-- Status: planned
+- Status: done
 - Why: `--timeout` (default 300 seconds) is the only way to give a large scan more time, but `action.yml` has only `path` and `base` inputs, so a slower Action scan exits 2.
 - Acceptance:
   - `action.yml` declares an optional `timeout` input, default `""`.
