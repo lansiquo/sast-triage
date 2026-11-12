@@ -122,7 +122,7 @@ Done when: a real PR is scanned end to end in durable mode on the host, worker r
 | F-2.2 | Decide the durable scanner path | S | done | Needs owner | A decision record names one scanner, exact version and required compatibility evidence. |
 | F-2.3 | Make the go-live evidence checklist reviewable | M | done | Needs owner | Every required release verification has an expected result and a NOT_RUN evidence field. |
 | F-2.4 | Prepare a locally installable CLI package | M | done | Needs owner | An offline-built wheel's entry point scans `tests/fixtures/project` with exit 1. |
-| F-2.5 | Decide the product framing before Phase 1 | S | planned | Needs owner | A decision document records one choice and an in/out scope list. |
+| F-2.5 | Decide the product framing before Phase 1 | S | done | Needs owner | A decision document records one choice and an in/out scope list. |
 
 ## Step 3: Become a triage platform (SARIF ingestion)
 
