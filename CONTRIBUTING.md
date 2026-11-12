@@ -7,7 +7,9 @@
    make check
    ```
 3. Keep `make check` passing. CI runs it on every pull request and push to main, and also runs the
-   GitHub Action against the self-check fixture.
+   GitHub Action against the self-check fixture. CI also gates the code with the released sast-triage
+   (a pull request fails only on a new P1 it adds, a push to main on any P1 in a full scan) and builds
+   and installs the package with `make package-check` on Python 3.12.
 
 | Command | What it runs |
 |---|---|
