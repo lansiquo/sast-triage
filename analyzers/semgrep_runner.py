@@ -340,8 +340,11 @@ def summarize_findings(findings: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[s
     new_p1 = [f for f in findings if f["new"] and f["priority"] == "P1"]
     if new_p1:
         plural = "" if len(new_p1) == 1 else "s"
+        # A file name must not end its code span or its line, and so add Markdown of its own under the
+        # gate line: the same characters are replaced as in scan_repo.skipped_note().
         gate_lines = [f"**Gate: FAIL** — {len(new_p1)} new P1 finding{plural}:",
-                      *(f"- `{f['path']}:{f['start_line']}` {f['rule_id']}" for f in new_p1[:10])]
+                      *("- `" + re.sub(r"[\x00-\x1f`|]", "?", f["path"]) + f":{f['start_line']}` {f['rule_id']}"
+                        for f in new_p1[:10])]
         if len(new_p1) > 10:
             gate_lines.append(f"- and {len(new_p1) - 10} more")
     else:

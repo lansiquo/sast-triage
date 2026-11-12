@@ -1091,3 +1091,171 @@ def test_readme_clean_step_cannot_hide_changed_source_files_from_a_base_scan(tmp
     assert result.returncode == 2, result.stderr
     assert 'no result issued' in result.stderr and result.stdout == '' and result.summary is None
     assert not os.path.lexists(root / SARIF_EXAMPLE)             # and there is nothing to upload
+
+
+# File names of the scanned project must not reach the console in a form a CI runner acts on. GitHub
+# Actions reads a workflow command from an output line that starts with `::name::` (after any spaces),
+# and from `##[name]` anywhere in a line. The same names without those characters print as before.
+
+LINE_START = 'a\n::warning::spoofed.js'      # a line feed, then the command at the start of the next line
+CARRIAGE_RETURN = 'c\r::warning::spoofed.js'  # the runner ends a line at a carriage return as well
+MID_LINE = 'b##[warning]spoofed.js'          # the older form, read anywhere in a line
+HOSTILE = [LINE_START, MID_LINE, CARRIAGE_RETURN]   # in the order the scan sorts them
+
+
+def command_lines(captured):
+    """Every line of stdout and stderr that a runner would read as a workflow command."""
+    return [line for stream in (captured.out, captured.err) for line in stream.splitlines()
+            if re.search(r'^\s*::|##\[', line)]
+
+
+def test_hostile_file_names_cannot_issue_workflow_commands_from_the_report_or_the_gate_list(tmp_path, capsys):
+    root = project(tmp_path, {**dict.fromkeys(HOSTILE, 'eval(code);'), 'ok.js': 'eval(code);'})
+    assert scan_repo.main([str(root)]) == 1
+    captured = capsys.readouterr()
+    assert command_lines(captured) == []
+    assert ('\nFull scan (4 files): FAILURE\n'
+            '  [P1, new] a?::warning::spoofed.js:1  js-dangerous-eval\n'
+            '  [P1, new] b#?[warning]spoofed.js:1  js-dangerous-eval\n'
+            '  [P1, new] c?::warning::spoofed.js:1  js-dangerous-eval\n'
+            '  [P1, new] ok.js:1  js-dangerous-eval\n') in captured.out
+    assert ('**Gate: FAIL** — 4 new P1 findings:\n'
+            '- `a?::warning::spoofed.js:1` js-dangerous-eval\n'
+            '- `b#?[warning]spoofed.js:1` js-dangerous-eval\n'
+            '- `c?::warning::spoofed.js:1` js-dangerous-eval\n'
+            '- `ok.js:1` js-dangerous-eval\n\n') in captured.out
+    assert captured.err == ''
+
+
+def test_hostile_file_names_cannot_issue_workflow_commands_from_json_and_decode_to_the_same_names(tmp_path, capsys):
+    root = project(tmp_path, dict.fromkeys(HOSTILE, 'eval(code);'))
+    assert scan_repo.main([str(root), '--json']) == 1
+    captured = capsys.readouterr()
+    assert command_lines(captured) == [] and captured.err == ''
+    assert captured.out.count('"b#\\u0023[warning]spoofed.js"') == 2      # in files, and as the finding's path
+    report = json.loads(captured.out)
+    assert report['files'] == HOSTILE and report['conclusion'] == 'failure'
+    assert [(f['priority'], f['new'], f['path']) for f in report['findings']] == [('P1', True, name) for name in HOSTILE]
+
+
+@pytest.mark.parametrize('arguments', [[], ['--json']], ids=['report', 'json'])
+def test_hostile_file_names_cannot_issue_workflow_commands_from_the_1_mib_error(tmp_path, capsys, arguments):
+    root = project(tmp_path, {**dict.fromkeys(HOSTILE, 'x' * (1024 * 1024 + 1)), 'app.js': 'eval(code);'})
+    assert scan_repo.main([str(root), *arguments]) == 2
+    captured = capsys.readouterr()
+    assert command_lines(captured) == [] and captured.out == ''
+    assert captured.err == ('error: over the 1 MiB per-file scan limit, no result issued: '
+                            'a?::warning::spoofed.js, b#?[warning]spoofed.js, c?::warning::spoofed.js\n')
+
+
+@pytest.mark.parametrize('folder', ['x##[warning]spoofed', 'y\n::warning::spoofed', 'z\r::warning::spoofed'])
+def test_hostile_folder_names_cannot_issue_workflow_commands_when_a_folder_cannot_be_listed(tmp_path, monkeypatch,
+                                                                                         capsys, folder):
+    root = project(tmp_path, {'app.js': 'const a = 1;', f'{folder}/x.js': 'eval(code);'})
+    locked, scandir = root / folder, scan_repo.os.scandir
+    def refuse(path='.'):
+        if Path(path) == locked:
+            raise PermissionError(13, 'Permission denied', str(path))
+        return scandir(path)
+    monkeypatch.setattr(scan_repo.os, 'scandir', refuse)
+    assert scan_repo.main([str(root)]) == 2
+    captured = capsys.readouterr()
+    assert command_lines(captured) == [] and captured.out == ''
+    assert captured.err.startswith('error: cannot list the project files, no result issued.\n[Errno 13] ')
+    assert 'spoofed' in captured.err
+
+
+def test_hostile_file_names_cannot_issue_workflow_commands_when_the_scan_cannot_read_a_file(tmp_path, monkeypatch,
+                                                                                           capsys):
+    root = project(tmp_path, {'app.js': 'eval(code);'})
+    def unreadable(*a, **k):
+        raise OSError(36, 'File name too long', f'/stage/{MID_LINE}')
+    monkeypatch.setattr(scan_repo, 'run_semgrep', unreadable)
+    assert scan_repo.main([str(root)]) == 2
+    captured = capsys.readouterr()
+    assert command_lines(captured) == [] and captured.out == ''
+    assert captured.err == ("error: scan incomplete, no result issued.\n"
+                            "[Errno 36] File name too long: '/stage/b#?[warning]spoofed.js'\n")
+
+
+def test_a_scanner_error_of_several_lines_prints_as_before(tmp_path, monkeypatch, capsys):
+    root = project(tmp_path, {'app.js': 'eval(code);'})
+    error = runner.SemgrepInvocationError(65, ['semgrep', '--json', '.'], '', 'Scanner skipped requested source files')
+    def broken(*a, **k):
+        raise error
+    monkeypatch.setattr(scan_repo, 'run_semgrep', broken)
+    assert scan_repo.main([str(root)]) == 2
+    assert capsys.readouterr().err == ('error: scan incomplete, no result issued.\nSemgrep failed (exit=65).\n'
+                                       'Command: semgrep --json .\nSTDERR (truncated):\n'
+                                       'Scanner skipped requested source files\n')
+
+
+# The next three print sites exist only with --base. The diff is replaced, so these tests do not depend
+# on git or on how it reports such names; they check only what main() prints for the names it is given.
+
+@pytest.mark.parametrize('arguments', [[], ['--json']], ids=['report', 'json'])
+def test_hostile_file_names_cannot_issue_workflow_commands_from_the_skipped_changed_files(tmp_path, monkeypatch,
+                                                                                         capsys, arguments):
+    monkeypatch.setattr(scan_repo, 'changes_since', lambda root, base: ({}, {}, list(HOSTILE)))
+    assert scan_repo.main([str(tmp_path), '--base', 'main', *arguments]) == 0
+    captured = capsys.readouterr()
+    assert command_lines(captured) == [] and captured.err == ''
+    if arguments:
+        assert json.loads(captured.out)['skipped_changed_files'] == HOSTILE
+    else:
+        assert ('\nSkipped changed files: a?::warning::spoofed.js, b#?[warning]spoofed.js, c?::warning::spoofed.js\n'
+                in captured.out)
+
+
+def test_hostile_file_names_cannot_issue_workflow_commands_from_the_missing_changed_files(tmp_path, monkeypatch,
+                                                                                         capsys):
+    monkeypatch.setattr(scan_repo, 'changes_since', lambda root, base: (dict.fromkeys(HOSTILE), {}, []))
+    assert scan_repo.main([str(tmp_path), '--base', 'main']) == 2
+    captured = capsys.readouterr()
+    assert command_lines(captured) == [] and captured.out == ''
+    assert captured.err == ('error: changed files are missing from the working tree, no result issued: '
+                            'a?::warning::spoofed.js, b#?[warning]spoofed.js, c?::warning::spoofed.js\n')
+
+
+GIT_ERROR = "fatal: bad path 'a\n  ::warning::spoofed' in 'b##[warning]spoofed'\nhint: c\r::warning::spoofed"
+
+
+@pytest.mark.parametrize('site', ['diff', 'base versions'])
+def test_file_names_in_a_git_error_cannot_issue_workflow_commands_and_its_other_lines_print_as_before(
+        tmp_path, monkeypatch, capsys, site):
+    root = project(tmp_path, {'app.js': 'const a = 1;'})
+    def refuse(*a, **k):
+        raise scan_repo.DiffError(GIT_ERROR, 128)
+    if site == 'diff':
+        monkeypatch.setattr(scan_repo, 'changes_since', refuse)
+        first = 'error: cannot diff against main, no result issued.\n'
+    else:
+        monkeypatch.setattr(scan_repo, 'changes_since', lambda root, base: ({'app.js': set()}, {'app.js': 'app.js'}, []))
+        monkeypatch.setattr(scan_repo, 'run_semgrep', lambda *a, **k: [])
+        monkeypatch.setattr(scan_repo, 'base_findings', refuse)
+        first = 'error: cannot read the base versions from main, no result issued.\n'
+    assert scan_repo.main([str(root), '--base', 'main']) == 2
+    captured = capsys.readouterr()
+    assert command_lines(captured) == [] and captured.out == ''
+    assert captured.err == (first + "fatal: bad path 'a\n?  ::warning::spoofed' in 'b#?[warning]spoofed'\n"
+                            "hint: c?::warning::spoofed\n")
+    # An ordinary error of several lines keeps every line as git wrote it.
+    def ordinary(*a, **k):
+        raise scan_repo.DiffError("fatal: bad object\nhint: see 'git fsck' ::: [1] # ##", 128)
+    monkeypatch.setattr(scan_repo, 'changes_since' if site == 'diff' else 'base_findings', ordinary)
+    assert scan_repo.main([str(root), '--base', 'main']) == 2
+    assert capsys.readouterr().err == first + "fatal: bad object\nhint: see 'git fsck' ::: [1] # ##\n"
+
+
+def test_log_safe_changes_only_control_characters_and_the_command_prefix():
+    for ordinary in ('src/app.js', 'routes/[id]/page#1.tsx', 'docs/c#/#[x]/##.py', 'naïve/файл ①.py',
+                     'a b/~$tmp (1)::x.js', 'emoji/\U0001f469‍\U0001f4bb.py'):
+        assert scan_repo.log_safe(ordinary) == ordinary
+        assert scan_repo.log_safe(ordinary, lines=True) == ordinary
+    assert scan_repo.log_safe('a\r\n::error::x\t##[error]y\x00\x1b[0m\x7f\x85  z') == \
+        'a??::error::x?#?[error]y??[0m????z'
+    assert scan_repo.log_safe('###[##[') == '##?[#?['
+    assert scan_repo.log_safe('  　::error::x\n::stop-commands::t\nok ::x', lines=True) == \
+        '?  　::error::x\n?::stop-commands::t\nok ::x'
+    assert json.loads(scan_repo.log_safe(json.dumps(['a\\##[x]', '###[']), json_text=True)) == ['a\\##[x]', '###[']
+    assert '##[' not in scan_repo.log_safe(json.dumps(['a\\##[x]', '###[']), json_text=True)
