@@ -22,7 +22,7 @@ from collections import Counter
 from pathlib import Path
 
 from analyzers.semgrep_runner import (NEW_LEGEND, SemgrepInvocationError, _annotation_level, add_fingerprints,
-                                      run_semgrep, summarize_findings)
+                                      ascii_name, is_utf8_name, run_semgrep, summarize_findings)
 from analyzers.triage import (NOT_IN_BASE, added_lines, baseline_counts, gate, is_source_path, is_test_path,
                               needs_base, triage)
 from trusted_rules import OFFLINE_RULESET
@@ -58,7 +58,7 @@ class DiffError(Exception):
 def git(root: Path, *args: str, binary: bool = False):
     """Run git in the project without external diff drivers, text conversion or pagers.
 
-    Returns its output as text, or as bytes with binary=True (for file contents).
+    Returns its output as text, or as bytes with binary=True (for file contents and the -z list of names).
     """
     try:
         # The project's own git config must not run anything: no fsmonitor hook, no external diff.
@@ -68,6 +68,8 @@ def git(root: Path, *args: str, binary: bool = False):
                                 env={**os.environ, 'GIT_PAGER': 'cat', 'GIT_EXTERNAL_DIFF': ''})
     except (OSError, subprocess.TimeoutExpired) as error:
         raise DiffError(f'git failed: {error}') from error
+    except UnicodeDecodeError as error:   # text output is decoded strictly, so it never reaches the scan garbled
+        raise DiffError(f'git {args[0]} output is not valid UTF-8') from error
     if result.returncode != 0:
         stderr = result.stderr.decode('utf-8', 'replace') if binary else result.stderr
         raise DiffError(stderr.strip() or f'git {args[0]} failed', result.returncode)
@@ -106,7 +108,19 @@ def changes_since(root: Path, base: str):
                         'they share: fetch it with `git fetch --unshallow`, or in GitHub Actions check out with '
                         '`fetch-depth: 0`.') from error
     spec = f'{base}...HEAD'
-    fields = git(root, 'diff', '--relative', '--name-status', '-z', '-M', '--no-ext-diff', '--no-textconv', spec).split('\0')
+    # The -z list is bytes, not text: each name is taken exactly as git lists it, or the scan stops.
+    listing = git(root, 'diff', '--relative', '--name-status', '-z', '-M', '--no-ext-diff', '--no-textconv', spec,
+                  binary=True)
+    try:
+        fields = listing.decode('utf-8').split('\0')
+    except UnicodeDecodeError:
+        names = []
+        for name in listing.split(b'\0'):
+            try:
+                name.decode('utf-8')
+            except UnicodeDecodeError:
+                names.append(ascii_name(name))
+        raise DiffError('changed file names that are not valid UTF-8 cannot be scanned: ' + ', '.join(names)) from None
     changed = {}
     previous = {}
     skipped = []
@@ -196,14 +210,39 @@ def source_files(root: Path):
     return sorted(found)
 
 
+# Control characters, and the two Unicode characters that end a line: all that can break a printed line.
+LINE_BREAKING = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')
+
+
+def log_safe(text, lines=False, json_text=False):
+    """Text that can hold file names of the scanned project, made safe to print where a CI runner reads it.
+
+    GitHub Actions takes a workflow command from an output line that starts with `::name::`, and from
+    `##[name]` anywhere in a line. So control characters, line breaks included, become `?` as in
+    skipped_note(), and `##[` becomes `#?[`. Every line the scan prints starts with its own fixed text,
+    so a name that cannot break the line cannot start one. Other text comes back unchanged.
+
+    lines=True is for an error message of several lines (git's, the scanner's): its line feeds stay,
+    and a line that would start with `::` starts with `?` instead.
+    json_text=True is for JSON, which has escaped the control characters already: `##[` is written as
+    `#\\u0023[`, which decodes to the same string.
+    """
+    if json_text:
+        return text.replace('##[', '#\\u0023[')
+    if lines:
+        return '\n'.join('?' + line if line.lstrip().startswith('::') else line
+                         for line in map(log_safe, text.split('\n')))
+    return LINE_BREAKING.sub('?', text).replace('##[', '#?[')
+
+
 def print_summary(title, findings, conclusion, base=None):
     """One line per triaged finding, then the Check Run's Markdown summary with the gate result."""
     print(f'\n{title}: {conclusion.upper()}')
     for f in findings:
         label = 'new' if f['new'] else 'pre-existing'
         note = '  (line unchanged; not in the base version)' if f.get('new_because') == NOT_IN_BASE else ''
-        print(f"  [{f['priority']}, {label}] {f['path']}:{f['start_line']}  {f['rule_id']}{note}")
-    print(markdown(findings, base))
+        print(log_safe(f"  [{f['priority']}, {label}] {f['path']}:{f['start_line']}  {f['rule_id']}{note}"))
+    print(markdown([{**f, 'path': log_safe(f['path'])} for f in findings], base))
 
 
 def markdown(findings, base=None):
@@ -301,24 +340,33 @@ def main(argv=None):
         try:
             changed, previous, skipped = changes_since(root, args.base)
         except DiffError as error:
-            print(f'error: cannot diff against {args.base}, no result issued.\n{error}', file=sys.stderr)
+            print(f'error: cannot diff against {args.base}, no result issued.\n{log_safe(str(error), lines=True)}',
+                  file=sys.stderr)
             return ERROR
         files = sorted(p for p in changed if not (root / p).is_symlink())
         missing = [p for p in files if not (root / p).is_file()]
         if missing:
-            print('error: changed files are missing from the working tree, no result issued: ' + ', '.join(missing),
-                  file=sys.stderr)
+            print('error: changed files are missing from the working tree, no result issued: '
+                  + log_safe(', '.join(missing)), file=sys.stderr)
             return ERROR
     else:
         try:
             files = source_files(root)
         except OSError as error:
-            print(f'error: cannot list the project files, no result issued.\n{error}', file=sys.stderr)
+            print(f'error: cannot list the project files, no result issued.\n{log_safe(str(error), lines=True)}',
+                  file=sys.stderr)
             return ERROR
         changed = dict.fromkeys(files)   # no diff: every file's changes are unknown, so every finding is new
+    # Semgrep lists a file with such a name as scanned without matching a rule against it.
+    not_utf8 = [ascii_name(name) for name in files if not is_utf8_name(name)]
+    if not_utf8:
+        print('error: file names that are not valid UTF-8 cannot be scanned, no result issued: ' + ', '.join(not_utf8),
+              file=sys.stderr)
+        return ERROR
     too_large = [name for name in files if (root / name).stat().st_size > MAX_FILE_BYTES]
     if too_large:
-        print('error: over the 1 MiB per-file scan limit, no result issued: ' + ', '.join(too_large), file=sys.stderr)
+        print('error: over the 1 MiB per-file scan limit, no result issued: ' + log_safe(', '.join(too_large)),
+              file=sys.stderr)
         return ERROR
 
     findings = []
@@ -331,7 +379,8 @@ def main(argv=None):
                 findings = add_fingerprints(run_semgrep(files, str(root), config=str(config), timeout_s=args.timeout),
                                             str(root))
             except (SemgrepInvocationError, ValueError, RuntimeError, OSError) as error:
-                print(f'error: scan incomplete, no result issued.\n{error}', file=sys.stderr)
+                print(f'error: scan incomplete, no result issued.\n{log_safe(str(error), lines=True)}',
+                      file=sys.stderr)
                 return ERROR
             if args.base:
                 # Only files with a finding on untouched lines need their base version.
@@ -339,8 +388,8 @@ def main(argv=None):
                     baseline = base_findings(root, args.base, {p: previous[p] for p in needs_base(findings, changed)
                                                                if p in previous}, str(config), args.timeout)
                 except DiffError as error:
-                    print(f'error: cannot read the base versions from {args.base}, no result issued.\n{error}',
-                          file=sys.stderr)
+                    print(f'error: cannot read the base versions from {args.base}, no result issued.\n'
+                          f'{log_safe(str(error), lines=True)}', file=sys.stderr)
                     return ERROR
                 if baseline is None:
                     print('warning: the base versions of the changed files could not be scanned, '
@@ -360,10 +409,11 @@ def main(argv=None):
             return ERROR
     scan = f'changes since {args.base}' if args.base else 'full: every finding counts as new'
     if args.json:
-        print(json.dumps({'directory': str(args.directory), 'scan': scan, 'base': args.base,
-                          'files_scanned': len(files), 'files': files, 'rules': RULE_COUNT,
-                          'skipped_changed_files': skipped, 'conclusion': conclusion,
-                          'counts': summarize_findings(findings)[0], 'findings': findings}, indent=2))
+        print(log_safe(json.dumps({'directory': str(args.directory), 'scan': scan, 'base': args.base,
+                                   'files_scanned': len(files), 'files': files, 'rules': RULE_COUNT,
+                                   'skipped_changed_files': skipped, 'conclusion': conclusion,
+                                   'counts': summarize_findings(findings)[0], 'findings': findings}, indent=2),
+                       json_text=True))
     else:
         if args.base:
             print(f'sast-triage scan of {args.directory}, changes since {args.base}')
@@ -379,7 +429,7 @@ def main(argv=None):
         print(f'Skipped: {", ".join(CHANGED_EXCLUDED_DIRS if args.base else EXCLUDED_DIRS)} folders and minified '
               '*.min.js files.')
         if skipped:
-            print(f'Skipped changed files: {", ".join(skipped)}')
+            print(log_safe(f'Skipped changed files: {", ".join(skipped)}'))
         if files:
             print_summary(title, findings, conclusion, args.base)
         else:
