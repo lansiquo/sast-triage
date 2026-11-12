@@ -99,7 +99,7 @@ Goal: Users can export SARIF, diagnose missing base history and use the existing
 
 ### F-1.5 Action input that writes SARIF
 
-- Status: planned
+- Status: done
 - Why: After F-1.1 the CLI writes SARIF but the Action can't request it. The Action uses no token (SECURITY.md) and no other actions (README), so the user's own workflow step must upload.
 - Acceptance:
   - `action.yml` has an optional `sarif` input, default `""`; when set, the Scan step passes `--sarif` with that path; when empty, arguments are unchanged. It reaches the script only through an environment variable.
