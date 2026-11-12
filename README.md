@@ -289,7 +289,7 @@ rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy
 |---|---|
 | 0 | The gate passes: no new P1 finding, or nothing to scan |
 | 1 | The gate fails: at least one new P1 finding |
-| 2 | Usage, git or scanner error, such as a missing directory, an unknown `--base` ref, a folder that can't be read, a file over 1 MiB, an incomplete scan or a `--sarif` destination that can't be written; no result is issued |
+| 2 | Usage, git or scanner error, such as a missing directory, a `--base` ref that is not a commit in the checkout or has no merge base with `HEAD` (the error says what to fetch), a folder that can't be read, a file over 1 MiB, an incomplete scan or a `--sarif` destination that can't be written; no result is issued |
 
 ## Scope and limits
 

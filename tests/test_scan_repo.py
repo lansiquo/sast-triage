@@ -539,3 +539,168 @@ def test_sarif_is_written_when_only_the_base_version_scan_fails(tmp_path, monkey
     capsys.readouterr()
     overwritten = json.loads(existing.read_text())['runs'][0]['results']
     assert [r['ruleId'] for r in overwritten] == [f['rule_id'] for f in with_sarif['findings']]
+
+
+# --base without the history it needs (F-1.2): exit 2, no result, and the error says what to fetch.
+# Fixtures use ASCII file and ref names only.
+
+def command_line(*arguments):
+    """Run scan_repo.py the way a user does, for its real exit status, stdout and stderr."""
+    return subprocess.run([sys.executable, 'scan_repo.py', *map(str, arguments)], cwd=ROOT,
+                          capture_output=True, text=True, timeout=300)
+
+
+def shallow_clone(tmp_path, *options):
+    """`git clone --depth 1` of repository(), on its feature branch: one commit deep, no history."""
+    origin = repository(tmp_path / 'origin')
+    clone = tmp_path / 'clone'
+    git(tmp_path, 'clone', '-q', '--depth', '1', '--branch', 'feature', *options, origin.as_uri(), str(clone))
+    assert (clone / '.git' / 'shallow').is_file()
+    return clone
+
+
+def test_base_ref_missing_from_the_checkout_exits_two_names_it_and_says_how_to_fetch_it(tmp_path):
+    root = repository(tmp_path / 'repo')
+    sarif, summary = tmp_path / 'out.sarif', tmp_path / 'summary.md'
+    for output in ([], ['--json'], ['--sarif', sarif, '--markdown', summary]):
+        result = command_line(root, '--base', 'origin/missing', *output)
+        assert result.returncode == 2, result.stderr
+        assert result.stdout == '' and not sarif.exists() and not summary.exists()      # no result
+        assert 'error: cannot diff against origin/missing, no result issued.' in result.stderr
+        assert 'origin/missing is not a commit in this checkout' in result.stderr
+        assert '`git fetch' in result.stderr and '`fetch-depth: 0`' in result.stderr
+
+
+@pytest.mark.parametrize('base', ['origin/main', 'HEAD~1'])
+def test_base_ref_left_out_of_a_shallow_clone_exits_two_and_says_how_to_fetch_it(tmp_path, capsys, base):
+    clone = shallow_clone(tmp_path)               # a single-branch clone: neither the base branch nor HEAD's parent
+    assert scan_repo.main([str(clone), '--base', base, '--json']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and f'cannot diff against {base}, no result issued' in captured.err
+    assert f'{base} is not a commit in this checkout' in captured.err
+    assert '`git fetch' in captured.err and '`fetch-depth: 0`' in captured.err
+
+
+def test_shallow_clone_without_the_merge_base_exits_two_and_says_no_merge_base_was_found(tmp_path, capsys):
+    clone = shallow_clone(tmp_path, '--no-single-branch')
+    git(clone, 'rev-parse', '--verify', '--quiet', 'origin/main^{commit}')        # the base ref exists here
+    sarif, summary = tmp_path / 'out.sarif', tmp_path / 'summary.md'
+    for output in ([], ['--json'], ['--sarif', sarif, '--markdown', summary]):
+        result = command_line(clone, '--base', 'origin/main', *output)
+        assert result.returncode == 2, result.stderr
+        assert result.stdout == '' and not sarif.exists() and not summary.exists()      # no result
+        assert 'error: cannot diff against origin/main, no result issued.' in result.stderr
+        assert 'no merge base was found' in result.stderr and '`fetch-depth: 0`' in result.stderr
+        assert 'is not a commit in this checkout' not in result.stderr
+    # Once the history is there, the same command on the same clone issues a result.
+    git(clone, 'fetch', '-q', '--unshallow')
+    assert scan_repo.main([str(clone), '--base', 'origin/main', '--json']) == 1
+    captured = capsys.readouterr()
+    assert captured.err == '' and json.loads(captured.out)['files'] == ['src/cache.py', 'src/legacy.py', 'web/app.js']
+
+
+def test_unrelated_history_in_a_full_clone_also_exits_two_with_no_merge_base_found(tmp_path, capsys):
+    root = repository(tmp_path)
+    git(root, 'switch', '-q', '--orphan', 'unrelated')
+    project(root, {'solo.py': 'x = 1'})
+    git(root, 'add', '.')
+    git(root, 'commit', '-q', '-m', 'a second root commit')
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and 'cannot diff against main, no result issued' in captured.err
+    assert 'no merge base was found for main and HEAD' in captured.err
+
+
+@pytest.mark.parametrize('base', ['--output=x', '-x'])
+def test_base_starting_with_a_dash_is_refused_with_exit_two_before_git_runs(tmp_path, monkeypatch, capsys, base):
+    root = repository(tmp_path)
+
+    def no_git(*a, **k):
+        raise AssertionError('git must not run for a base that starts with a dash')
+    monkeypatch.setattr(scan_repo.subprocess, 'run', no_git)
+    assert scan_repo.main([str(root), f'--base={base}']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and 'no result issued' in captured.err and f'invalid base: {base}' in captured.err
+    assert 'fetch' not in captured.err              # refused as invalid, not reported as missing history
+    with pytest.raises(SystemExit) as error:        # as a separate argument, the option parser refuses it
+        scan_repo.main([str(root), '--base', base])
+    assert error.value.code == 2 and capsys.readouterr().out == ''
+
+
+def test_other_git_failures_keep_their_own_message_and_get_no_fetch_hint(tmp_path, monkeypatch, capsys):
+    # Outside a git repository git says so itself: the base is not "missing from this checkout".
+    assert scan_repo.main([str(project(tmp_path / 'plain', {'a.py': 'x = 1'})), '--base', 'main']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and 'cannot diff against main, no result issued' in captured.err
+    assert 'is not a commit in this checkout' not in captured.err and 'fetch-depth' not in captured.err
+    # A merge-base lookup that fails for another reason still stops the scan, with git's own words.
+    root, real = repository(tmp_path / 'repo'), scan_repo.subprocess.run
+
+    def broken_merge_base(command, *a, **k):
+        if 'merge-base' in command:
+            return subprocess.CompletedProcess(command, 128, stdout='', stderr='fatal: bad object\n')
+        return real(command, *a, **k)
+    monkeypatch.setattr(scan_repo.subprocess, 'run', broken_merge_base)
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and 'cannot diff against main, no result issued.\nfatal: bad object' in captured.err
+    assert 'no merge base was found' not in captured.err and 'fetch-depth' not in captured.err
+
+
+# A successful --base scan, pinned to what 2.2.0 printed: checking for the history must not change it.
+BASE_REPORT = '''\
+sast-triage scan of {directory}, changes since main
+A finding is new when it covers a line changed since the base, or was not in the file before; only a new P1 fails.
+1 changed Python, JavaScript and TypeScript files, 41 service-owned rules.
+Skipped: .git, .hg, .svn, .venv, venv, __pycache__, node_modules folders and minified *.min.js files.
+
+Changes since main (1 files): FAILURE
+  [P1, new] server.js:4  js-child-process-exec  (line unchanged; not in the base version)
+### sast-triage — Semgrep summary
+
+**Gate: FAIL** — 1 new P1 finding:
+- `server.js:4` js-child-process-exec
+
+| Priority | New | Pre-existing |
+|---|---|---|
+| P1 | 1 | 0 |
+| P2 | 0 | 0 |
+| P3 | 0 | 0 |
+
+P1: high or critical severity in runtime code. P2: high or critical in test code, or medium in runtime code. \
+P3: everything else. New: on lines changed since main, or not in the file before those changes.
+'''
+BASE_FINDING = {
+    'path': 'server.js', 'start_line': 4, 'end_line': 4, 'severity': 'HIGH', 'rule_id': 'js-child-process-exec',
+    'title': 'child_process exec/execSync runs a shell command built at runtime (possible command injection)',
+    'message': 'child_process exec/execSync runs a shell command built at runtime (possible command injection)',
+    'fix': None, 'cwe': 'CWE-78', 'owasp': 'A03:2021', 'confidence': None, 'likelihood': None,
+    'fingerprint': '41093c0958e7832b', 'new': True, 'new_because': 'not in the base version', 'test_code': False,
+    'priority': 'P1',
+}
+
+
+def base_json(directory, file, conclusion, findings):
+    """The exact --json text of a one-file --base scan against main."""
+    counts = {priority: {'new': sum(f['priority'] == priority for f in findings), 'pre-existing': 0}
+              for priority in ('P1', 'P2', 'P3')}
+    return json.dumps({'directory': str(directory), 'scan': 'changes since main', 'base': 'main', 'files_scanned': 1,
+                       'files': [file], 'rules': 41, 'skipped_changed_files': [], 'conclusion': conclusion,
+                       'counts': counts, 'findings': findings}, indent=2) + '\n'
+
+
+def test_successful_base_scan_exit_status_and_output_are_unchanged(tmp_path, capsys):
+    root = introduced_elsewhere(tmp_path)
+    assert scan_repo.main([str(root), '--base', 'main']) == 1                 # the gate fails: exit 1
+    captured = capsys.readouterr()
+    assert captured.out == BASE_REPORT.format(directory=root) and captured.err == ''
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1
+    captured = capsys.readouterr()
+    assert captured.out == base_json(root, 'server.js', 'failure', [BASE_FINDING]) and captured.err == ''
+    git(root, 'switch', '-q', 'main')
+    git(root, 'switch', '-q', '-c', 'tidy')
+    project(root, {'other.js': 'const n = 2;'})
+    git(root, 'commit', '-q', '-am', 'tidy')
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 0       # the gate passes: exit 0
+    captured = capsys.readouterr()
+    assert captured.out == base_json(root, 'other.js', 'success', []) and captured.err == ''

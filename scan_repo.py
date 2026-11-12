@@ -48,7 +48,11 @@ def scannable(path: str, excluded=EXCLUDED_DIRS) -> bool:
 
 
 class DiffError(Exception):
-    """git could not produce the diff against the base."""
+    """git could not produce the diff against the base. `status` is git's exit status when it ran and failed."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 def git(root: Path, *args: str, binary: bool = False):
@@ -66,7 +70,7 @@ def git(root: Path, *args: str, binary: bool = False):
         raise DiffError(f'git failed: {error}') from error
     if result.returncode != 0:
         stderr = result.stderr.decode('utf-8', 'replace') if binary else result.stderr
-        raise DiffError(stderr.strip() or f'git {args[0]} failed')
+        raise DiffError(stderr.strip() or f'git {args[0]} failed', result.returncode)
     return result.stdout
 
 
@@ -84,7 +88,23 @@ def changes_since(root: Path, base: str):
     """
     if base.startswith('-'):
         raise DiffError(f'invalid base: {base}')
-    git(root, 'rev-parse', '--verify', '--quiet', f'{base}^{{commit}}')
+    # Each lookup exits with status 1 when the history it needs is not in the checkout, most often
+    # a shallow clone. Any other git failure keeps git's own message.
+    try:
+        git(root, 'rev-parse', '--verify', '--quiet', f'{base}^{{commit}}')
+    except DiffError as error:
+        if error.status != 1:
+            raise
+        raise DiffError(f'{base} is not a commit in this checkout. Check the ref name, or fetch the base branch '
+                        'first (`git fetch`); in GitHub Actions, check out with `fetch-depth: 0`.') from error
+    try:
+        git(root, 'merge-base', base, 'HEAD')
+    except DiffError as error:
+        if error.status != 1:
+            raise
+        raise DiffError(f'no merge base was found for {base} and HEAD. A shallow clone leaves out the history '
+                        'they share: fetch it with `git fetch --unshallow`, or in GitHub Actions check out with '
+                        '`fetch-depth: 0`.') from error
     spec = f'{base}...HEAD'
     fields = git(root, 'diff', '--relative', '--name-status', '-z', '-M', '--no-ext-diff', '--no-textconv', spec).split('\0')
     changed = {}
