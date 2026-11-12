@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [2.2.1] - 2026-11-11
 ### Changed
 - **`scan_repo.py --base` says which history is missing and how to fetch it.** When the base ref is not in the checkout, for example `scan_repo.py app --base origin/main` in a clone that never fetched `main`, the error names the ref, says it is not a commit in this checkout, and points to `git fetch` and, for GitHub Actions, `fetch-depth: 0`. It used to say only `git rev-parse failed`. When the ref exists but a shallow clone (`git clone --depth 1`) lacks its merge base with `HEAD`, the error says no merge base was found and points to `git fetch --unshallow` and `fetch-depth: 0`, in place of git's `no merge base`. Both still exit with status 2 and issue no result, and the scan fetches nothing itself. A `--base` value starting with `-` is still refused before git runs, and a successful `--base` scan's exit status and output are unchanged. (F-1.2)
 
