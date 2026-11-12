@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [2.5.0] - 2026-11-12
 ### Added
 - **Show findings as pull request annotations from the command line and the GitHub Action (`scan_repo.py DIR --github-annotations`, `annotations` input).** With the flag, `scan_repo.py` prints one GitHub Actions workflow command per finding after the report, and GitHub shows each as an annotation on the workflow run and on the pull request's files. For example, `scan_repo.py tests/fixtures/project --github-annotations` ends with `::error file=tests/fixtures/project/server.js,line=2,endLine=2,title=[P1%2C new] eval() runs code built at runtime (possible code injection)::eval() runs code built at runtime (possible code injection)%0ARule: js-dangerous-eval, CWE-95` and a `::warning` line for the P2 in its test file. Each command has `file`, `line`, `endLine` and `title`; its level is the GitHub App's: `::error` for a new P1, `::warning` for a new P2, `::notice` otherwise, so with `--base` a pre-existing finding is a notice. At most 200 commands are printed, in the App's order (P1 first); GitHub itself currently shows no more than 10 errors, 10 warnings and 10 notices from one step. `file` is the scanned directory joined with the finding's path, so in the Action with `path: services/api` a finding in `server.js` is annotated at `services/api/server.js`. Text is escaped as the runner reads it: `%`, carriage return and line feed become `%25`, `%0D` and `%0A`, and in `file` and `title` also `:` and `,` become `%3A` and `%2C`, so a file name such as `a,b:c%d` followed by a line feed and `e.js` gives one command with `file=a%2Cb%3Ac%25d%0Ae.js` and can't add a command or a property of its own; any other control character prints as `?` and `##[` as `#?[`, as in the report. `--github-annotations` with `--json` is a usage error with exit status 2, and a scanner or git error still exits with status 2 and prints no command. In `action.yml` the new optional `annotations` input (default `"false"`) adds the flag when it is `"true"`; any other value, an empty one included, stops the Scan step with exit status 2 before the scan and with no summary. Like the other inputs, it reaches the step's script only through an environment variable, and the Action still uses no token. Without the flag or the input, the output is unchanged, and neither changes the gate, an exit status, the Markdown summary or the SARIF file. (F-1.4)
 
@@ -147,5 +149,6 @@ Upgrading from 1.0.0: the app reads `.env` only when `PRSEC_LOAD_DOTENV=1` (`mak
 ### Added
 - Initial tag and first protected merge baseline.
 
-[Unreleased]: https://github.com/lansiquo/sast-triage/compare/v2.4.1...HEAD
+[Unreleased]: https://github.com/lansiquo/sast-triage/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/lansiquo/sast-triage/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/lansiquo/sast-triage/compare/v2.4.0...v2.4.1
