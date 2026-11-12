@@ -22,7 +22,7 @@ from collections import Counter
 from pathlib import Path
 
 from analyzers.semgrep_runner import (NEW_LEGEND, SemgrepInvocationError, _annotation_level, add_fingerprints,
-                                      run_semgrep, summarize_findings)
+                                      ascii_name, is_utf8_name, run_semgrep, summarize_findings)
 from analyzers.triage import (NOT_IN_BASE, added_lines, baseline_counts, gate, is_source_path, is_test_path,
                               needs_base, triage)
 from trusted_rules import OFFLINE_RULESET
@@ -58,7 +58,7 @@ class DiffError(Exception):
 def git(root: Path, *args: str, binary: bool = False):
     """Run git in the project without external diff drivers, text conversion or pagers.
 
-    Returns its output as text, or as bytes with binary=True (for file contents).
+    Returns its output as text, or as bytes with binary=True (for file contents and the -z list of names).
     """
     try:
         # The project's own git config must not run anything: no fsmonitor hook, no external diff.
@@ -68,6 +68,8 @@ def git(root: Path, *args: str, binary: bool = False):
                                 env={**os.environ, 'GIT_PAGER': 'cat', 'GIT_EXTERNAL_DIFF': ''})
     except (OSError, subprocess.TimeoutExpired) as error:
         raise DiffError(f'git failed: {error}') from error
+    except UnicodeDecodeError as error:   # text output is decoded strictly, so it never reaches the scan garbled
+        raise DiffError(f'git {args[0]} output is not valid UTF-8') from error
     if result.returncode != 0:
         stderr = result.stderr.decode('utf-8', 'replace') if binary else result.stderr
         raise DiffError(stderr.strip() or f'git {args[0]} failed', result.returncode)
@@ -106,7 +108,19 @@ def changes_since(root: Path, base: str):
                         'they share: fetch it with `git fetch --unshallow`, or in GitHub Actions check out with '
                         '`fetch-depth: 0`.') from error
     spec = f'{base}...HEAD'
-    fields = git(root, 'diff', '--relative', '--name-status', '-z', '-M', '--no-ext-diff', '--no-textconv', spec).split('\0')
+    # The -z list is bytes, not text: each name is taken exactly as git lists it, or the scan stops.
+    listing = git(root, 'diff', '--relative', '--name-status', '-z', '-M', '--no-ext-diff', '--no-textconv', spec,
+                  binary=True)
+    try:
+        fields = listing.decode('utf-8').split('\0')
+    except UnicodeDecodeError:
+        names = []
+        for name in listing.split(b'\0'):
+            try:
+                name.decode('utf-8')
+            except UnicodeDecodeError:
+                names.append(ascii_name(name))
+        raise DiffError('changed file names that are not valid UTF-8 cannot be scanned: ' + ', '.join(names)) from None
     changed = {}
     previous = {}
     skipped = []
@@ -343,6 +357,12 @@ def main(argv=None):
                   file=sys.stderr)
             return ERROR
         changed = dict.fromkeys(files)   # no diff: every file's changes are unknown, so every finding is new
+    # Semgrep lists a file with such a name as scanned without matching a rule against it.
+    not_utf8 = [ascii_name(name) for name in files if not is_utf8_name(name)]
+    if not_utf8:
+        print('error: file names that are not valid UTF-8 cannot be scanned, no result issued: ' + ', '.join(not_utf8),
+              file=sys.stderr)
+        return ERROR
     too_large = [name for name in files if (root / name).stat().st_size > MAX_FILE_BYTES]
     if too_large:
         print('error: over the 1 MiB per-file scan limit, no result issued: ' + log_safe(', '.join(too_large)),
