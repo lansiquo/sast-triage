@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 PY ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
-.PHONY: setup test selfcheck serve check
+.PHONY: setup test selfcheck serve check package-check
 setup:
 	$(PY) -m pip install -r requirements.txt
 
@@ -18,3 +18,9 @@ serve:
 	PRSEC_LOAD_DOTENV=1 $(PY) -m uvicorn app:app --host 127.0.0.1 --port 8000
 
 check: test selfcheck
+
+# Builds the wheel offline from a copy of the checkout in a temporary folder, installs it into a fresh
+# virtual environment and compares its sast-triage command with scan_repo.py. Not part of `make check`:
+# the build needs setuptools 77.0.3 or later installed already, which requirements.txt does not install.
+package-check:
+	PRSEC_LOAD_DOTENV=0 PYTHONDONTWRITEBYTECODE=1 $(PY) -m pytest -q tests/package_check.py

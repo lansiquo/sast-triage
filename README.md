@@ -177,6 +177,42 @@ folders, and minified `*.min.js` files. With `--base`, changed files in `vendor`
 that can't be read stops the scan with exit status 2. The project's own Semgrep rules, ignore files and git
 diff helpers are not used.
 
+## Install as a package (local build)
+
+The command line can also be built into a wheel and installed. That adds a `sast-triage` command that
+behaves like `python scan_repo.py`: the same arguments, output and exit codes. The package is
+not published to PyPI or to any other index, so `pip install sast-triage` does not install this project:
+build the wheel from a clone. The wheel holds only the command line (`scan_repo.py`, `trusted_rules.py`
+and `analyzers/`), not the GitHub App or its worker.
+
+```bash
+git clone https://github.com/lansiquo/sast-triage.git
+python3 -m venv sast-venv
+sast-venv/bin/python -m pip install -r sast-triage/requirements-cli.txt "setuptools>=77.0.3"
+cd sast-triage
+../sast-venv/bin/python -m pip wheel --no-deps --no-build-isolation --no-index -w ../sast-wheel .
+../sast-venv/bin/python -m pip install --no-index ../sast-wheel/sast_triage-*.whl
+cd ..
+sast-venv/bin/sast-triage /path/to/project
+sast-venv/bin/sast-triage /path/to/project --base origin/main
+```
+
+Only the first `pip install` downloads anything: the pinned Semgrep and certifi, as above, and setuptools,
+the build backend. The build and the install of the wheel are offline (`--no-index`). The build uses the
+setuptools that is already installed, which must be 77.0.3 or later, and fails without it. The install
+succeeds only where Semgrep 1.79.0 and certifi are installed already. Use a virtual environment of its
+own, as above: the wheel installs its modules under the names `scan_repo`, `trusted_rules` and
+`analyzers`. The version in the wheel's name comes from `pyproject.toml`, where it is written by hand;
+between releases it is a development version such as `2.6.0.dev0`. The build leaves `build/` and
+`sast_triage.egg-info/` in the clone, and git ignores both.
+
+`make package-check` repeats this from a development environment that has setuptools 77.0.3 or later:
+it builds the wheel offline from a copy of the checkout in a temporary folder, installs it into a fresh
+virtual environment, and checks that `sast-triage`, run from outside the checkout, scans
+`tests/fixtures/project` with exit status 1 and prints what `python scan_repo.py` prints. It is not part
+of `make check`. `scan_repo.py`, `requirements-cli.txt` and the GitHub Action work as before, with or
+without the package.
+
 ## GitHub Action
 
 In a workflow that runs on `pull_request`:
