@@ -131,7 +131,7 @@ sast-venv/bin/python sast-triage/scan_repo.py /path/to/project --base origin/mai
 ```
 
 ```text
-scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--sarif FILE] [--timeout SECONDS]
+scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--sarif FILE] [--timeout SECONDS] [--github-annotations]
 ```
 
 Without `--base`, every supported file is scanned and every finding counts as new, so on an existing
@@ -149,6 +149,27 @@ GitHub code scanning or read by other SARIF tools (uploading is the caller's own
 written whenever the scan issues a result (exit 0 or 1), including when the base versions of the changed
 files cannot be scanned and every finding counts as new; a scanner, git or 1 MiB error (exit 2) writes
 nothing and leaves an existing file untouched. `--sarif` changes no exit status or other output.
+
+`--github-annotations` also prints, after the report, one GitHub Actions
+[workflow command](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands)
+per finding, which GitHub shows as an annotation on the workflow run and on the pull request's files.
+`scan_repo.py tests/fixtures/project --github-annotations` ends with:
+
+```text
+::error file=tests/fixtures/project/server.js,line=2,endLine=2,title=[P1%2C new] eval() runs code built at runtime (possible code injection)::eval() runs code built at runtime (possible code injection)%0ARule: js-dangerous-eval, CWE-95
+::warning file=tests/fixtures/project/__tests__/server.test.js,line=2,endLine=2,title=[P2%2C new] eval() runs code built at runtime (possible code injection)::eval() runs code built at runtime (possible code injection)%0ARule: js-dangerous-eval, CWE-95
+```
+
+The level follows the Check Run: `::error` for a new P1, `::warning` for a new P2 and `::notice`
+otherwise. At most 200 commands are printed, P1 first, as the GitHub App annotates. GitHub itself
+[currently shows](https://github.com/actions/toolkit/blob/main/docs/problem-matchers.md#limitations) no
+more than 10 errors, 10 warnings and 10 notices from one step, so the report above the commands stays the
+full list. `file` is `DIRECTORY` joined with the finding's path: run the command from the repository root,
+or give an absolute `DIRECTORY`, so the annotations land on the files. Text is escaped as the runner reads
+it (`%`, carriage return and line feed; in `file` and `title` also `:` and `,`), so a file name can't add a
+command of its own; any other control character prints as `?` and `##[` as `#?[`, as in the report. A
+scan that stops with exit status 2 prints no command, `--github-annotations` with `--json` is a usage
+error (exit status 2), and the flag changes no exit status and nothing else in the output.
 
 A full scan skips files in `.git`, `node_modules`, `vendor`, `dist`, `build`, `coverage` and virtualenv
 folders, and minified `*.min.js` files. With `--base`, changed files in `vendor`, `dist`, `build` and
@@ -170,9 +191,10 @@ In a workflow that runs on `pull_request`:
     base: ""                     # default: the pull request's base branch; "none" for a full scan
     timeout: ""                  # scanner time limit in seconds; default: 300
     sarif: ""                    # also write the findings to this SARIF file; default: no file
+    annotations: "false"         # "true": also annotate the findings on the pull request
 ```
 
-All four inputs are optional (defaults shown):
+All five inputs are optional (defaults shown):
 
 | Input | Default | Meaning |
 |---|---|---|
@@ -180,6 +202,7 @@ All four inputs are optional (defaults shown):
 | `base` | `""` | Git ref to compare with. Empty: the pull request's base branch, or a full scan on other events. `none`: always a full scan |
 | `timeout` | `""` | Scanner time limit in seconds, passed to `scan_repo.py` as `--timeout`. Empty: its default of 300 seconds |
 | `sarif` | `""` | File to also write the findings to as SARIF 2.1.0, passed to `scan_repo.py` as `--sarif`. A relative path is relative to the workspace. Empty: no SARIF file |
+| `annotations` | `"false"` | `"true"`: also print one workflow command per finding, as `scan_repo.py` does with `--github-annotations`, so the findings show as annotations. Any value other than `"true"` or `"false"` stops the step with exit status 2 |
 
 On a pull request it scans the files changed since the base branch; on other events, or with `base: none`,
 it scans everything. The step fails when the gate fails and adds the summary to the job summary. It
@@ -232,6 +255,15 @@ false when the scan step was skipped or the file is missing (`hashFiles` is then
 failed gate too. Use a path the repository does not use, since the `rm` step removes whatever is there.
 Paths in the file are relative to `path`; code scanning reads them from the repository root, which is the
 default `path: .`.
+
+`annotations: true` adds `--github-annotations`: after the report, the step prints one workflow command
+per finding, at most 200 and P1 first, and GitHub shows them as annotations on the workflow run and on the
+pull request's files: an error for a new P1, a warning for a new P2 and a notice otherwise. GitHub
+currently shows no more than 10 of each level from one step. This needs no token and no added permission.
+An annotation's file is the `path` input joined with the finding's path, so with `path: services/api` a
+finding in `server.js` is annotated at `services/api/server.js`. The gate, the exit status and the summary
+are the same with and without annotations. The value must be `true` or `false`: any other value, an empty
+one included, stops the step with exit status 2 before the scan, with no summary.
 
 ## How triage works
 
@@ -346,7 +378,7 @@ rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy
 |---|---|
 | 0 | The gate passes: no new P1 finding, or nothing to scan |
 | 1 | The gate fails: at least one new P1 finding |
-| 2 | Usage, git or scanner error, such as a missing directory, a `--base` ref that is not a commit in the checkout or has no merge base with `HEAD` (the error says what to fetch), a folder that can't be read, a file over 1 MiB, an incomplete scan or a `--sarif` destination that can't be written; no result is issued |
+| 2 | Usage, git or scanner error, such as a missing directory, a `--base` ref that is not a commit in the checkout or has no merge base with `HEAD` (the error says what to fetch), a folder that can't be read, a file over 1 MiB, an incomplete scan, a `--sarif` destination that can't be written, `--github-annotations` with `--json` or an `annotations` input that is not `true` or `false`; no result is issued |
 
 ## Scope and limits
 
