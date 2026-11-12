@@ -20,6 +20,13 @@ inputs:
       its default of 300 seconds. A value that is not a whole number stops the step with exit status 2
       and no result.
     default: ""
+  sarif:
+    description: >-
+      File to also write the findings to as SARIF 2.1.0, passed to scan_repo.py as --sarif. A relative
+      path is relative to the workspace. Empty writes no SARIF file. The file is written only when the
+      scan issues a result (exit status 0 or 1): a scan that stops with exit status 2 creates no file
+      and leaves an existing one unchanged. Uploading the file is a separate step of your workflow.
+    default: ""
 runs:
   using: composite
   steps:
@@ -35,6 +42,7 @@ runs:
         SAST_PATH: ${{ inputs.path }}
         SAST_BASE: ${{ inputs.base }}
         SAST_TIMEOUT: ${{ inputs.timeout }}
+        SAST_SARIF: ${{ inputs.sarif }}
       run: |
         base="$SAST_BASE"
         if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then base="origin/$GITHUB_BASE_REF"; fi
@@ -42,6 +50,7 @@ runs:
         args=("$SAST_PATH" --markdown "$RUNNER_TEMP/sast-triage.md")
         if [ -n "$base" ]; then args+=(--base "$base"); fi
         if [ -n "$SAST_TIMEOUT" ]; then args+=(--timeout "$SAST_TIMEOUT"); fi
+        if [ -n "$SAST_SARIF" ]; then args+=(--sarif "$SAST_SARIF"); fi
         rm -f "$RUNNER_TEMP/sast-triage.md"
         set +e
         "$RUNNER_TEMP/sast-triage-venv/bin/python" "$GITHUB_ACTION_PATH/scan_repo.py" "${args[@]}"
