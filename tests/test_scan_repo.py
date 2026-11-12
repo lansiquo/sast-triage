@@ -729,10 +729,11 @@ def scan_step(tmp_path):
 
     Each run gets its own RUNNER_TEMP, and its interpreter records the arguments it is given. With
     stub=True it does nothing else; otherwise it passes them on to the installed test environment, so the
-    suite does not pip install or use the network. base_ref is GITHUB_BASE_REF, set on pull request events."""
+    suite does not pip install or use the network. base_ref is GITHUB_BASE_REF, set on pull request events.
+    cwd is the step's working directory: on a runner, the job's workspace."""
     runs = []
 
-    def run(directory, stub=False, base_ref=None, **inputs):
+    def run(directory, stub=False, base_ref=None, cwd=ROOT, **inputs):
         values = {name: str(declared.get('default', '')) for name, declared in action_definition()['inputs'].items()}
         values.update(inputs, path=str(directory))
         step = action_scan_step()
@@ -752,7 +753,7 @@ def scan_step(tmp_path):
         env.update({name: re.sub(r'\$\{\{ *inputs\.(\w+) *\}\}', lambda match: values[match[1]], value)
                     for name, value in step.get('env', {}).items()})
         result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', step['run']],
-                                cwd=ROOT, env=env, capture_output=True, text=True, timeout=300)
+                                cwd=cwd, env=env, capture_output=True, text=True, timeout=300)
         result.runner_temp = runner_temp
         result.report = runner_temp / 'sast-triage.md'
         result.summary = (runner_temp / 'summary.md').read_bytes() if (runner_temp / 'summary.md').exists() else None
@@ -841,3 +842,252 @@ def test_action_timeout_leaves_the_base_arguments_and_gate_result_unchanged(tmp_
     assert valid.returncode == code, valid.stderr
     assert valid.arguments[4:] == [*base_arguments, '--timeout', '600']
     assert (valid.stdout, valid.summary) == (empty.stdout, empty.summary)
+
+
+# The Action's `sarif` input (F-1.5): the Scan step passes it to scan_repo.py as --sarif. The step runs here as
+# for `timeout` above. File names are ASCII only; the SARIF paths have spaces in them.
+
+SARIF_EXAMPLE = 'sast-triage.sarif'           # the path the README workflow example writes and uploads
+# The `if` of the README's upload step: a completed scan, whether or not the gate failed.
+UPLOAD_IF = "${{ !cancelled() && steps.scan.outcome != 'skipped' && hashFiles('sast-triage.sarif') != '' }}"
+ACTION_BASES = pytest.mark.parametrize('inputs,base_ref,base_arguments', [
+    ({'base': 'none'}, 'main', []),                              # base: none, a full scan even on a pull request
+    ({}, None, []),                                              # no base and no pull request: a full scan
+    ({'base': 'release'}, 'main', ['--base', 'release']),        # a base ref
+    ({}, 'main', ['--base', 'origin/main']),                     # a pull request's base branch
+], ids=['base-none', 'no-base', 'base-ref', 'pull-request-base'])
+FULL_AND_BASE = pytest.mark.parametrize('base,code,labels', [
+    # a base ref: the P1 is on an untouched line, so pre-existing, and the gate passes
+    ('main', 0, [('py-os-popen', False, 'note')]),
+    # base: none: a full scan, where every finding is new, and the P1 fails the gate
+    ('none', 1, [('py-os-popen', True, 'error'), ('py-weak-md5', True, 'warning'),
+                 ('py-insecure-deserialization-pickle-loads', True, 'warning')]),
+], ids=['base-ref', 'base-none'])
+
+
+def readme_github_action():
+    return (ROOT / 'README.md').read_text().split('\n## GitHub Action\n')[1].split('\n## ')[0]
+
+
+def readme_upload_job():
+    """The one job of the README "GitHub Action" workflow example that uploads the SARIF file."""
+    examples = [text for text in re.findall(r'```yaml\n(.*?)```', readme_github_action(), re.S) if 'upload-sarif' in text]
+    assert len(examples) == 1, 'README "GitHub Action" needs one workflow example with an upload step'
+    (job,) = yaml.safe_load(examples[0])['jobs'].values()
+    return job
+
+
+def tree(folder):
+    """Every path under `folder` with its type and, for a file, its bytes: to show a run left nothing behind."""
+    return sorted((path.relative_to(folder).as_posix(), path.is_dir(), None if path.is_dir() else path.read_bytes())
+                  for path in folder.rglob('*'))
+
+
+def test_action_declares_an_optional_sarif_input_with_an_empty_default():
+    declared = action_definition()['inputs']['sarif']
+    assert declared['default'] == '' and not declared.get('required') and declared['description']
+
+
+@ACTION_BASES
+def test_action_sarif_empty_leaves_the_arguments_unchanged_and_a_path_adds_sarif_with_that_path(
+        tmp_path, scan_step, inputs, base_ref, base_arguments):
+    absolute, relative = str(tmp_path / 'scan results' / 'sast triage.sarif'), 'scan results/sast triage.sarif'
+    for sarif, added in (({}, []), ({'sarif': ''}, []),
+                         ({'sarif': absolute}, ['--sarif', absolute]),
+                         ({'sarif': relative}, ['--sarif', relative]),
+                         ({'sarif': absolute, 'timeout': '600'}, ['--timeout', '600', '--sarif', absolute])):
+        result = scan_step(tmp_path, stub=True, base_ref=base_ref, **inputs, **sarif)
+        assert result.returncode == 0, result.stderr
+        assert result.arguments == [str(ROOT / 'scan_repo.py'), str(tmp_path), '--markdown', str(result.report),
+                                    *base_arguments, *added], sarif
+
+
+def test_action_sarif_reaches_the_script_only_through_an_environment_variable(tmp_path, scan_step):
+    assert [value for value in action_scan_step()['env'].values() if 'sarif' in value] == ['${{ inputs.sarif }}']
+    assert (ROOT / 'action.yml').read_text().count('inputs.sarif') == 1
+    for step in action_definition()['runs']['steps']:
+        assert '${{' not in step.get('run', ''), f"{step['name']}: an expression is expanded inside the run script"
+    # The value stays one argument: bash does not split it, and never runs it.
+    hostile = 'out.sarif --json; touch "$RUNNER_TEMP/ran" $(touch "$RUNNER_TEMP/ran") `touch "$RUNNER_TEMP/ran"`'
+    result = scan_step(tmp_path, stub=True, sarif=hostile)
+    assert result.returncode == 0, result.stderr
+    assert result.arguments[-2:] == ['--sarif', hostile] and not (result.runner_temp / 'ran').exists()
+
+
+@FULL_AND_BASE
+def test_action_sarif_writes_the_file_for_a_full_and_a_base_scan_at_a_path_with_spaces(tmp_path, scan_step, base, code,
+                                                                                      labels):
+    root = pre_existing_only(tmp_path / 'check out')
+    base_arguments = [] if base == 'none' else ['--base', base]
+    without = scan_step(root, base=base)
+    assert without.returncode == code, without.stderr
+    by_command_line = tmp_path / 'command line.sarif'
+    assert command_line(root, *base_arguments, '--sarif', by_command_line).returncode == code
+    (tmp_path / 'scan results').mkdir()
+    (root / 'scan results').mkdir()
+    for sarif, written in (
+            (str(tmp_path / 'scan results' / 'sast triage.sarif'), tmp_path / 'scan results' / 'sast triage.sarif'),
+            # A relative path is relative to the step's working directory, the workspace: here the checkout.
+            ('scan results/sast triage.sarif', root / 'scan results' / 'sast triage.sarif')):
+        result = scan_step(root, base=base, sarif=sarif, cwd=root)
+        assert result.returncode == code, result.stderr
+        assert result.arguments[4:] == [*base_arguments, '--sarif', sarif]
+        # The same file the command line writes for this scan, and no other file beside it.
+        assert written.read_bytes() == by_command_line.read_bytes()
+        assert [path.name for path in written.parent.iterdir()] == ['sast triage.sarif']
+        # The gate result, the report and the job summary are the ones of a scan without the input.
+        assert (result.stdout, result.summary) == (without.stdout, without.summary)
+    document = json.loads(by_command_line.read_text())
+    assert document['version'] == '2.1.0' and len(document['runs']) == 1
+    assert [(r['ruleId'], r['properties']['new'], r['level']) for r in document['runs'][0]['results']] == labels
+
+
+@pytest.mark.parametrize('inputs', [
+    {'base': 'none'},                              # a full scan with a file over the 1 MiB limit
+    {'base': 'main'},                              # the same file, changed since the base
+    {'base': 'origin/missing'},                    # a base ref that is not in the checkout
+    {'base': 'none', 'timeout': 'abc'},            # a usage error
+], ids=['full-scan-size-limit', 'base-scan-size-limit', 'base-ref-missing', 'usage-error'])
+def test_action_sarif_is_not_created_and_an_existing_file_is_unchanged_when_the_scan_exits_two(tmp_path, scan_step,
+                                                                                              inputs):
+    root = pre_existing_only(tmp_path / 'check out')
+    project(root, {'big.js': 'x' * (1024 * 1024 + 1)})
+    git(root, 'add', '.')
+    git(root, 'commit', '-q', '-m', 'a file over the limit')
+    folder = tmp_path / 'scan results'
+    folder.mkdir()
+    (folder / 'existing file.sarif').write_bytes(b'OLD')
+    before = tree(folder)
+    for name in ('fresh file.sarif', 'existing file.sarif'):
+        result = scan_step(root, sarif=str(folder / name), **inputs)
+        assert result.returncode == 2, result.stderr
+        assert result.arguments[-2:] == ['--sarif', str(folder / name)]
+        assert result.stdout == '' and result.summary is None and not result.report.exists()      # no result
+        assert tree(folder) == before, name                  # nothing created, the existing file unchanged
+
+
+@pytest.mark.parametrize('base', ['main', 'none'], ids=['base-ref', 'base-none'])
+def test_action_sarif_path_that_cannot_be_written_exits_two_with_no_partial_artifact(tmp_path, scan_step, base):
+    root = pre_existing_only(tmp_path / 'check out')
+    folder = tmp_path / 'scan results'
+    (folder / 'a folder.sarif').mkdir(parents=True)             # the path is a folder
+    (folder / 'a file').write_bytes(b'KEPT')                    # the path is below a file
+    (folder / 'read only').mkdir()
+    (folder / 'read only' / 'existing file.sarif').write_bytes(b'OLD')
+    targets = [folder / 'no such folder' / 'out.sarif', folder / 'a folder.sarif', folder / 'a file' / 'out.sarif']
+    if hasattr(os, 'geteuid') and os.geteuid() != 0:            # file permissions do not stop root
+        targets += [folder / 'read only' / 'fresh file.sarif', folder / 'read only' / 'existing file.sarif']
+    before = tree(folder)
+    (folder / 'read only').chmod(0o555)
+    try:
+        for target in targets:
+            result = scan_step(root, base=base, sarif=str(target))
+            assert result.returncode == 2, (target, result.stderr)
+            assert 'could not write the SARIF file' in result.stderr and 'no result issued' in result.stderr
+            assert result.stdout == '', target                   # no report either
+            assert tree(folder) == before, target                # no SARIF file, whole or partial, and no temporary
+    finally:
+        (folder / 'read only').chmod(0o755)
+
+
+@pytest.mark.parametrize('base', ['main', 'none'], ids=['base-ref', 'base-none'])
+def test_action_sarif_path_that_is_not_a_valid_argument_exits_two_before_the_scan(tmp_path, scan_step, base):
+    root = pre_existing_only(tmp_path / 'check out')
+    workspace = tmp_path / 'work space'
+    workspace.mkdir()
+    for sarif in ('--json', '-o', '--sarif'):                    # a path can't start with a dash: write ./-o
+        cli = command_line(root, '--sarif', sarif)
+        result = scan_step(root, base=base, sarif=sarif, cwd=workspace)
+        assert (cli.returncode, result.returncode) == (2, 2), (sarif, result.stderr)
+        assert 'scan_repo.py: error: argument --sarif: expected one argument' in result.stderr, sarif
+        assert result.stderr.splitlines()[-1] == cli.stderr.splitlines()[-1], sarif
+        assert result.stdout == '' and result.summary is None and not result.report.exists(), sarif
+        assert tree(workspace) == [], sarif
+
+
+def test_readme_github_action_documents_the_sarif_input_and_its_default():
+    section = readme_github_action()
+    rows = [line for line in section.splitlines() if line.startswith('| `sarif` |')]
+    assert len(rows) == 1, 'the inputs table of README "GitHub Action" needs one `sarif` row'
+    default = json.dumps(action_definition()['inputs']['sarif']['default'])          # "", as the README writes it
+    assert rows[0].startswith(f'| `sarif` | `{default}` |') and '`--sarif`' in rows[0]
+    assert f'    sarif: {default} ' in section, 'the workflow example shows the default too'
+    assert len(action_definition()['inputs']) == 4 and 'All four inputs are optional' in section
+
+
+def test_readme_github_action_shows_a_separate_upload_step_pinned_to_a_full_commit_sha():
+    section, job = readme_github_action(), readme_upload_job()
+    steps = job['steps']
+    (scan,) = [step for step in steps if step.get('uses', '').startswith('lansiquo/sast-triage@')]
+    (upload,) = [step for step in steps if step.get('uses', '').startswith('github/codeql-action/upload-sarif@')]
+    assert steps.index(upload) > steps.index(scan)                # a step of the user's workflow, after the scan
+    assert re.fullmatch(r'[0-9a-f]{40}', upload['uses'].split('@')[1]), 'pin the upload step to a full commit SHA'
+    assert scan['with'] == {'sarif': SARIF_EXAMPLE} and upload['with'] == {'sarif_file': SARIF_EXAMPLE}
+    # It needs security-events: write, and the README says so.
+    assert job['permissions']['security-events'] == 'write' and '`security-events: write`' in section
+    # sast-triage itself still uses no token and no other actions: said in the README, and true of action.yml.
+    assert 'uses no token and no other actions' in ' '.join(section.split())
+    assert all('uses' not in step for step in action_definition()['runs']['steps'])
+    assert 'token' not in (ROOT / 'action.yml').read_text().lower()
+
+
+def test_readme_upload_step_checks_for_a_completed_scan_so_it_never_uploads_a_stale_file(tmp_path, scan_step):
+    steps = readme_upload_job()['steps']
+    clean, scan, upload = steps[-3:]
+    assert clean == {'run': f'rm -rf {SARIF_EXAMPLE}'}            # the step right before the scan
+    assert scan['id'] == 'scan' and upload['if'] == UPLOAD_IF
+    assert [step for step in steps if 'run' in step] == [clean]  # and no step prints the file to the log
+
+    root = pre_existing_only(tmp_path / 'check out')              # the job's workspace
+    path, outside = root / SARIF_EXAMPLE, tmp_path / 'outside.sarif'
+    outside.write_bytes(b'OLD')
+
+    def upload_runs(outcome):
+        """UPLOAD_IF in a job that was not cancelled, given the Scan step's outcome.
+
+        hashFiles() is empty unless its pattern matches a file in the workspace; a folder matches through
+        the files in it."""
+        matched = path.is_file() or (path.is_dir() and any(found.is_file() for found in path.rglob('*')))
+        return outcome != 'skipped' and matched
+
+    def job(stale, **inputs):
+        """The example's steps after the checkout, which brought `stale` along at the SARIF path."""
+        stale()
+        assert upload_runs('skipped') is False                    # an earlier step failed: the scan never ran
+        subprocess.run(['bash', '--noprofile', '--norc', '-e', '-c', clean['run']], cwd=root, check=True, timeout=60)
+        return scan_step(root, sarif=SARIF_EXAMPLE, cwd=root, **inputs)
+
+    def stale_folder():
+        path.mkdir()
+        (path / 'old.sarif').write_bytes(b'OLD')
+
+    stale_file, stale_link = (lambda: path.write_bytes(b'OLD')), (lambda: path.symlink_to(outside))
+    # A completed scan, exit 0 or exit 1: the file is this scan's own, and the step uploads it.
+    for stale, base, code, outcome in ((stale_file, 'main', 0, 'success'), (stale_folder, 'none', 1, 'failure')):
+        result = job(stale, base=base)
+        assert result.returncode == code, result.stderr
+        assert path.is_file() and not path.is_symlink() and json.loads(path.read_text())['version'] == '2.1.0'
+        assert upload_runs(outcome) is True
+        path.unlink()
+    # A scan that stops with exit status 2: nothing is at the path, so nothing is uploaded.
+    (root / 'big.js').write_text('x' * (1024 * 1024 + 1))        # over the 1 MiB per-file limit
+    for stale in (stale_file, stale_folder, stale_link):
+        result = job(stale, base='none')
+        assert result.returncode == 2, result.stderr
+        assert not os.path.lexists(path) and upload_runs('failure') is False
+    assert outside.read_bytes() == b'OLD'                        # removing a link leaves its target alone
+
+
+def test_readme_clean_step_cannot_hide_changed_source_files_from_a_base_scan(tmp_path, scan_step):
+    # A pull request that puts source code at the SARIF path does not get a scan without it: the scan stops.
+    clean = readme_upload_job()['steps'][-3]
+    assert clean == {'run': f'rm -rf {SARIF_EXAMPLE}'}
+    root = pre_existing_only(tmp_path / 'check out')
+    project(root, {f'{SARIF_EXAMPLE}/handler.py': 'import os\nos.system(cmd)'})
+    git(root, 'add', '.')
+    git(root, 'commit', '-q', '-m', 'source code at the SARIF path')
+    subprocess.run(['bash', '--noprofile', '--norc', '-e', '-c', clean['run']], cwd=root, check=True, timeout=60)
+    result = scan_step(root, base='main', sarif=SARIF_EXAMPLE, cwd=root)
+    assert result.returncode == 2, result.stderr
+    assert 'no result issued' in result.stderr and result.stdout == '' and result.summary is None
+    assert not os.path.lexists(root / SARIF_EXAMPLE)             # and there is nothing to upload
