@@ -164,7 +164,7 @@ In a workflow that runs on `pull_request`:
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0               # the base branch's history, to diff against it
-- uses: lansiquo/sast-triage@v2.2.0
+- uses: lansiquo/sast-triage@v2.2.1
   with:
     path: .                      # directory to scan
     base: ""                     # default: the pull request's base branch; "none" for a full scan
@@ -173,7 +173,7 @@ In a workflow that runs on `pull_request`:
 Both inputs are optional (defaults shown). On a pull request it scans the files changed since the base
 branch; on other events, or with `base: none`, it scans everything. The step fails when the gate fails and
 adds the summary to the job summary. It installs only `requirements-cli.txt` with the runner's Python and
-uses no other actions. Pin a release tag such as `@v2.2.0`, or a full commit SHA for the strictest
+uses no other actions. Pin a release tag such as `@v2.2.1`, or a full commit SHA for the strictest
 supply-chain safety.
 
 ## How triage works
