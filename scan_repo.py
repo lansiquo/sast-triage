@@ -22,7 +22,8 @@ from collections import Counter
 from pathlib import Path
 
 from analyzers.semgrep_runner import (NEW_LEGEND, SemgrepInvocationError, _annotation_level, add_fingerprints,
-                                      ascii_name, is_utf8_name, run_semgrep, summarize_findings)
+                                      ascii_name, is_utf8_name, run_semgrep, summarize_findings,
+                                      to_github_annotations)
 from analyzers.triage import (NOT_IN_BASE, added_lines, baseline_counts, gate, is_source_path, is_test_path,
                               needs_base, triage)
 from trusted_rules import OFFLINE_RULESET
@@ -308,6 +309,39 @@ def write_sarif(path: Path, document):
         raise
 
 
+MAX_ANNOTATIONS = 200   # as on the GitHub App's Check Run
+# Check Run annotation level (analyzers.semgrep_runner) -> GitHub Actions workflow command.
+ANNOTATION_COMMAND = {'failure': 'error', 'warning': 'warning', 'notice': 'notice'}
+
+
+def workflow_commands(findings, directory):
+    """GitHub Actions workflow commands that annotate the findings: the Check Run's annotations, for a runner.
+
+    One line per finding, for the first MAX_ANNOTATIONS findings in the order given (P1 first), each
+    with the level and title of its Check Run annotation: `::error` for a new P1, `::warning` for a new
+    P2, `::notice` otherwise. `file` is the scanned directory joined with the finding's path, which
+    names the file from the workspace when the scan runs there, as the Action's does.
+
+    Every value is escaped the way the runner unescapes it: `%` first, then carriage return and line
+    feed, and in a property also `:` and `,`. So no value can end its line, end the properties or add
+    one, and each line is exactly one command. log_safe() then treats the line like every other line.
+    """
+    def escaped(value, is_property=True):
+        value = str(value).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+        return value.replace(':', '%3A').replace(',', '%2C') if is_property else value
+
+    commands = []
+    shown = findings[:MAX_ANNOTATIONS]
+    for f, annotation in zip(shown, to_github_annotations(shown)):
+        properties = {'file': (directory / f['path']).as_posix(), 'line': annotation['start_line'],
+                      'endLine': annotation['end_line'], 'title': annotation['title']}
+        message = f"{annotation['message']}\nRule: {f['rule_id']}" + (f", {f['cwe']}" if f.get('cwe') else '')
+        commands.append(log_safe(f"::{ANNOTATION_COMMAND[annotation['annotation_level']]} "
+                                 + ','.join(f'{name}={escaped(value)}' for name, value in properties.items())
+                                 + '::' + escaped(message, is_property=False)))
+    return commands
+
+
 def skipped_note(skipped):
     """For the Markdown summary: the changed files a --base scan left out, so none are skipped silently."""
     if not skipped:
@@ -329,7 +363,12 @@ def main(argv=None):
                         help='also write the findings as a SARIF 2.1.0 file')
     parser.add_argument('--timeout', type=int, default=300, metavar='SECONDS',
                         help='scanner time limit (default: 300)')
+    parser.add_argument('--github-annotations', action='store_true',
+                        help='after the report, also print one GitHub Actions workflow command per finding '
+                             '(at most 200), which GitHub shows as annotations; not with --json')
     args = parser.parse_args(argv)
+    if args.github_annotations and args.json:
+        parser.error('--github-annotations cannot be used with --json: the commands would not be JSON')
     if not args.directory.is_dir():
         parser.error(f'not a directory: {args.directory}')
     if args.base == '':   # every check below reads an empty ref as "no --base", which would run a full scan
@@ -434,6 +473,9 @@ def main(argv=None):
             print_summary(title, findings, conclusion, args.base)
         else:
             print('\nNo supported Python, JavaScript or TypeScript files to scan.')
+        if args.github_annotations:
+            for command in workflow_commands(findings, args.directory):
+                print(command)
     return FAIL if conclusion == 'failure' else PASS
 
 

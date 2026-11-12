@@ -27,6 +27,13 @@ inputs:
       scan issues a result (exit status 0 or 1): a scan that stops with exit status 2 creates no file
       and leaves an existing one unchanged. Uploading the file is a separate step of your workflow.
     default: ""
+  annotations:
+    description: >-
+      "true" also prints one GitHub workflow command per finding, at most 200 and P1 first, as
+      scan_repo.py --github-annotations does, so the findings show as annotations on the run and on the
+      pull request's files: an error for a new P1, a warning for a new P2, a notice otherwise. "false"
+      prints none. Any other value stops the step with exit status 2 before the scan, and no result.
+    default: "false"
 runs:
   using: composite
   steps:
@@ -43,6 +50,7 @@ runs:
         SAST_BASE: ${{ inputs.base }}
         SAST_TIMEOUT: ${{ inputs.timeout }}
         SAST_SARIF: ${{ inputs.sarif }}
+        SAST_ANNOTATIONS: ${{ inputs.annotations }}
       run: |
         base="$SAST_BASE"
         if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then base="origin/$GITHUB_BASE_REF"; fi
@@ -51,6 +59,11 @@ runs:
         if [ -n "$base" ]; then args+=(--base "$base"); fi
         if [ -n "$SAST_TIMEOUT" ]; then args+=(--timeout "$SAST_TIMEOUT"); fi
         if [ -n "$SAST_SARIF" ]; then args+=(--sarif "$SAST_SARIF"); fi
+        case "$SAST_ANNOTATIONS" in
+          true) args+=(--github-annotations) ;;
+          false) ;;
+          *) echo 'error: the annotations input must be "true" or "false", no result issued.' >&2; exit 2 ;;
+        esac
         rm -f "$RUNNER_TEMP/sast-triage.md"
         set +e
         "$RUNNER_TEMP/sast-triage-venv/bin/python" -E -s "$GITHUB_ACTION_PATH/scan_repo.py" "${args[@]}"

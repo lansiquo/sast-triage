@@ -20,7 +20,7 @@ def action(tmp_path):
     (runner_temp / 'sast-triage-venv').symlink_to(sys.prefix, target_is_directory=True)
     env = {key: os.environ[key] for key in ('HOME', 'PATH', 'LANG', 'TZ') if key in os.environ}
     env.update({'RUNNER_TEMP': str(runner_temp), 'GITHUB_ACTION_PATH': str(ROOT),
-                'SAST_BASE': 'none', 'PRSEC_LOAD_DOTENV': '0', 'PRSEC_MODE': 'local',
+                'SAST_BASE': 'none', 'SAST_ANNOTATIONS': 'false', 'PRSEC_LOAD_DOTENV': '0', 'PRSEC_MODE': 'local',
                 'PRSEC_SCANNER_BACKEND': 'local'})
 
     def run(directory, summary):
@@ -159,8 +159,8 @@ def scan_checkout(tmp_path, workspace, **variables):
     summary = tmp_path / 'summary.md'
     result = run_step('Scan', workspace, runner_temp, GITHUB_ACTION_PATH=str(ROOT),
                       GITHUB_STEP_SUMMARY=str(summary), SAST_PATH='.', SAST_BASE='none', SAST_TIMEOUT='',
-                      SAST_SARIF='', PRSEC_LOAD_DOTENV='0', PRSEC_MODE='local', PRSEC_SCANNER_BACKEND='local',
-                      **variables)
+                      SAST_SARIF='', SAST_ANNOTATIONS='false', PRSEC_LOAD_DOTENV='0', PRSEC_MODE='local',
+                      PRSEC_SCANNER_BACKEND='local', **variables)
     return result, summary.read_bytes() if summary.exists() else b''
 
 
@@ -187,3 +187,21 @@ def test_scan_step_writes_a_utf8_summary_without_python_variables(tmp_path, lang
 
     assert result.returncode == 1, result.stderr
     assert '**Gate: FAIL** \u2014 1 new P1 finding'.encode('utf-8') in summary
+
+
+# The `annotations` input is "true" or "false". Any other value stops the Scan step before the scan, and
+# like every scan error it must not repeat the summary of an earlier scan in the same job.
+def test_scan_step_with_an_invalid_annotations_value_issues_no_summary_and_repeats_none(tmp_path):
+    workspace = project(tmp_path, 'const total = eval(req.body.preTax);\n')
+    first, summary = scan_checkout(tmp_path, workspace)
+    assert first.returncode == 1, first.stderr
+    assert b'**Gate: FAIL**' in summary
+
+    again = tmp_path / 'again.md'
+    second = run_step('Scan', workspace, tmp_path / 'runner_temp', GITHUB_ACTION_PATH=str(ROOT),
+                      GITHUB_STEP_SUMMARY=str(again), SAST_PATH='.', SAST_BASE='none', SAST_TIMEOUT='',
+                      SAST_SARIF='', SAST_ANNOTATIONS='yes', PRSEC_LOAD_DOTENV='0', PRSEC_MODE='local',
+                      PRSEC_SCANNER_BACKEND='local')
+    assert second.returncode == 2, second.stderr
+    assert second.stdout == '' and 'annotations' in second.stderr and 'no result issued' in second.stderr
+    assert not again.exists(), 'an invalid annotations value appended the previous scan\'s summary'

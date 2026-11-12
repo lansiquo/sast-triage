@@ -82,7 +82,7 @@ Goal: Users can export SARIF, diagnose missing base history and use the existing
 
 ### F-1.4 Pull request annotations from the command line and the Action
 
-- Status: planned
+- Status: done
 - Why: The App annotates up to 200 findings, P1 first; the Action's summary names at most 10 new P1 findings and no others (`summarize_findings` in `analyzers/semgrep_runner.py`), so users must read the log.
 - Acceptance:
   - `scan_repo.py DIR --github-annotations` prints, after the report, one GitHub workflow command per finding with `file`, `line`, `endLine` and `title`: `::error` for a new P1, `::warning` for a new P2, `::notice` otherwise, the App's levels.

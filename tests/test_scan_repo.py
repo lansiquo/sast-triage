@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -757,7 +758,9 @@ def scan_step(tmp_path):
         result.runner_temp = runner_temp
         result.report = runner_temp / 'sast-triage.md'
         result.summary = (runner_temp / 'summary.md').read_bytes() if (runner_temp / 'summary.md').exists() else None
-        result.arguments = (runner_temp / 'arguments').read_text().splitlines()
+        # None when the step stopped before it ran its interpreter.
+        result.arguments = ((runner_temp / 'arguments').read_text().splitlines()
+                            if (runner_temp / 'arguments').exists() else None)
         return result
 
     return run
@@ -1012,7 +1015,7 @@ def test_readme_github_action_documents_the_sarif_input_and_its_default():
     default = json.dumps(action_definition()['inputs']['sarif']['default'])          # "", as the README writes it
     assert rows[0].startswith(f'| `sarif` | `{default}` |') and '`--sarif`' in rows[0]
     assert f'    sarif: {default} ' in section, 'the workflow example shows the default too'
-    assert len(action_definition()['inputs']) == 4 and 'All four inputs are optional' in section
+    assert len(action_definition()['inputs']) == 5 and 'All five inputs are optional' in section
 
 
 def test_readme_github_action_shows_a_separate_upload_step_pinned_to_a_full_commit_sha():
@@ -1259,3 +1262,470 @@ def test_log_safe_changes_only_control_characters_and_the_command_prefix():
         '?  　::error::x\n?::stop-commands::t\nok ::x'
     assert json.loads(scan_repo.log_safe(json.dumps(['a\\##[x]', '###[']), json_text=True)) == ['a\\##[x]', '###[']
     assert '##[' not in scan_repo.log_safe(json.dumps(['a\\##[x]', '###[']), json_text=True)
+
+
+# --github-annotations (F-1.4): after the report, one GitHub Actions workflow command per finding, which a
+# runner turns into an annotation. A command is an output line of the form `::name key=value,key=value::message`.
+# The tests read the output the way the runner does: runner_commands() follows TryParseV2 in the runner's
+# ActionCommand.cs, and the two tables below are the runner's own.
+
+DATA_ESCAPES = (('\r', '%0D'), ('\n', '%0A'), ('%', '%25'))
+PROPERTY_ESCAPES = (('\r', '%0D'), ('\n', '%0A'), (':', '%3A'), (',', '%2C'), ('%', '%25'))
+LEVEL_COMMAND = {'failure': 'error', 'warning': 'warning', 'notice': 'notice'}     # Check Run level -> command
+EVAL = 'eval() runs code built at runtime (possible code injection)'              # js-dangerous-eval's message
+SPECIAL = 'a,b:c%d\ne.js'                             # a comma, a colon, a percent sign and a line feed
+
+
+def runner_unescape(value, escapes):
+    for character, escape in escapes:
+        value = value.replace(escape, character)
+    return value
+
+
+def runner_commands(*streams):
+    """Every workflow command a runner reads from the step's output, unescaped: (name, properties, message).
+
+    The runner ends a line at a line feed or a carriage return and skips leading whitespace. A line that
+    then starts with `::` and holds a second `::` is a command: the second `::` ends its name and properties.
+    """
+    commands = []
+    for stream in streams:
+        for line in re.split('[\r\n]', stream):
+            line = line.lstrip()
+            end = line.find('::', 2)
+            if not line.startswith('::') or end < 0:
+                continue
+            name, _, properties = line[2:end].partition(' ')
+            pairs = [pair.split('=', 1) for pair in properties.strip().split(',') if pair]
+            commands.append((name, {pair[0]: runner_unescape(pair[1], PROPERTY_ESCAPES)
+                                    for pair in pairs if len(pair) == 2 and all(pair)},
+                             runner_unescape(line[end + 2:], DATA_ESCAPES)))
+    return commands
+
+
+def expected_commands(findings, directory=None):
+    """The commands for triaged findings, as --json lists them: the App's annotations, in its order, at most 200."""
+    return [(LEVEL_COMMAND[annotation['annotation_level']],
+             {'file': f"{directory}/{f['path']}" if directory else f['path'], 'line': str(f['start_line']),
+              'endLine': str(f['end_line']), 'title': annotation['title']},
+             f"{annotation['message']}\nRule: {f['rule_id']}" + (f", {f['cwe']}" if f['cwe'] else ''))
+            for f, annotation in zip(findings, runner.to_github_annotations(findings)[:200])]
+
+
+def scanner_finding(path, line, severity='HIGH', rule_id='js-dangerous-eval', text=EVAL, cwe='CWE-95'):
+    """A finding as run_semgrep() returns it."""
+    return {'path': path, 'start_line': line, 'end_line': line, 'severity': severity, 'rule_id': rule_id,
+            'title': text, 'message': text, 'fix': None, 'cwe': cwe, 'owasp': None, 'confidence': None,
+            'likelihood': None}
+
+
+def new_and_pre_existing(tmp_path):
+    """A branch that adds one P1 to a file whose other P1 was already there: one new, one pre-existing."""
+    project(tmp_path, {'src/legacy.py': "import os\nos.popen('ls')"})
+    git(tmp_path, 'init', '-q', '-b', 'main')
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'base')
+    git(tmp_path, 'switch', '-q', '-c', 'feature')
+    project(tmp_path, {'src/legacy.py': "import os\nos.popen('ls')\n\nos.system(cmd)"})
+    git(tmp_path, 'commit', '-q', '-am', 'feature')
+    return tmp_path
+
+
+def test_github_annotations_prints_one_workflow_command_per_finding_after_the_report_with_the_apps_levels(
+        tmp_path, monkeypatch, capsys):
+    root = project(tmp_path)
+    monkeypatch.chdir(root)
+    assert scan_repo.main(['.', '--json']) == 1
+    findings = json.loads(capsys.readouterr().out)['findings']
+    assert scan_repo.main(['.']) == 1
+    report = capsys.readouterr().out
+    assert scan_repo.main(['.', '--github-annotations']) == 1
+    captured = capsys.readouterr()
+    assert captured.out.startswith(report) and captured.err == ''                # after the report
+    printed = captured.out[len(report):].splitlines()
+    assert len(printed) == len(findings) == 4                                      # one per finding
+    # file, line, endLine and title, then the message
+    assert printed[0] == ('::error file=server.js,line=2,endLine=2,'
+                          f'title=[P1%2C new] {EVAL}::{EVAL}%0ARule: js-dangerous-eval, CWE-95')
+    assert [line.split(',')[0] for line in printed] == [
+        '::error file=server.js', '::error file=tools/report.py',                 # new P1
+        '::warning file=routes/redirect.ts', '::warning file=test/routes.test.js']     # new P2
+    assert runner_commands(captured.out, captured.err) == expected_commands(findings)
+    assert not list(root.rglob('EXECUTED'))
+
+
+def test_github_annotations_use_the_apps_levels_error_for_a_new_p1_warning_for_a_new_p2_notice_otherwise():
+    triaged = [dict(scanner_finding('app.js', line), priority=priority, new=new, new_because=None, test_code=False,
+                    fingerprint=None)
+               for line, (priority, new) in enumerate([('P1', True), ('P2', True), ('P3', True), ('P1', False),
+                                                       ('P2', False), ('P3', False)], 1)]
+    commands = runner_commands('\n'.join(scan_repo.workflow_commands(triaged, Path('.'))))
+    assert [(name, properties['title'].split(']')[0] + ']', properties['line']) for name, properties, _ in commands] == [
+        ('error', '[P1, new]', '1'), ('warning', '[P2, new]', '2'), ('notice', '[P3, new]', '3'),
+        ('notice', '[P1, pre-existing]', '4'), ('notice', '[P2, pre-existing]', '5'),
+        ('notice', '[P3, pre-existing]', '6')]
+    # The App's own levels for the same findings.
+    assert [name for name, _, _ in commands] == [LEVEL_COMMAND[annotation['annotation_level']]
+                                                 for annotation in runner.to_github_annotations(triaged)]
+
+
+def test_github_annotations_prints_at_most_200_commands_in_the_apps_annotation_order_p1_first(tmp_path, monkeypatch,
+                                                                                             capsys):
+    root = project(tmp_path, {'app.js': 'const a = 1;', 'lib/util.py': 'x = 1', 'test/app.test.js': 'const b = 2;'})
+    # 250 findings, the scanner listing the lowest priority first: 90 P3, 120 P2 (50 of them in test code), 40 P1.
+    found = ([scanner_finding('lib/util.py', line, 'LOW', 'py-low', 'low') for line in range(1, 91)]
+             + [scanner_finding('app.js', line, 'MEDIUM', 'js-medium', 'medium') for line in range(1, 71)]
+             + [scanner_finding('test/app.test.js', line) for line in range(1, 51)]
+             + [scanner_finding('app.js', line) for line in range(71, 111)])
+    monkeypatch.setattr(scan_repo, 'run_semgrep', lambda *a, **k: [dict(f) for f in found])
+    assert scan_repo.main([str(root), '--json']) == 1
+    findings = json.loads(capsys.readouterr().out)['findings']
+    assert len(findings) == 250
+    assert scan_repo.main([str(root), '--github-annotations']) == 1
+    captured = capsys.readouterr()
+    commands = runner_commands(captured.out, captured.err)
+    assert len(commands) == 200 and len(command_lines(captured)) == 200
+    assert commands == expected_commands(findings, root)          # the App's first 200 annotations, in its order
+    assert [name for name, _, _ in commands] == ['error'] * 40 + ['warning'] * 120 + ['notice'] * 40
+    assert '| P1 | 40 | 0 |\n| P2 | 120 | 0 |\n| P3 | 90 | 0 |' in captured.out   # the report still counts all 250
+    # 200 findings are all annotated; the 201st is the first one left out.
+    monkeypatch.setattr(scan_repo, 'run_semgrep', lambda *a, **k: [dict(f) for f in found[:200]])
+    assert scan_repo.main([str(root), '--github-annotations']) == 0
+    captured = capsys.readouterr()
+    assert len(runner_commands(captured.out, captured.err)) == 200
+    monkeypatch.setattr(scan_repo, 'run_semgrep', lambda *a, **k: [dict(f) for f in found[:201]])
+    assert scan_repo.main([str(root), '--github-annotations']) == 0
+    captured = capsys.readouterr()
+    assert len(runner_commands(captured.out, captured.err)) == 200
+
+
+def test_github_annotations_escape_a_path_with_a_comma_colon_percent_sign_and_line_feed_into_exactly_one_command_line(
+        tmp_path, monkeypatch, capsys):
+    project(tmp_path, {SPECIAL: 'eval(code);'})
+    monkeypatch.chdir(tmp_path)
+    assert scan_repo.main(['.', '--github-annotations']) == 1
+    captured = capsys.readouterr()
+    line = ('::error file=a%2Cb%3Ac%25d%0Ae.js,line=1,endLine=1,'
+            f'title=[P1%2C new] {EVAL}::{EVAL}%0ARule: js-dangerous-eval, CWE-95')      # the escaped path
+    assert captured.out.endswith('\n' + line + '\n') and captured.err == ''
+    assert command_lines(captured) == [line]                      # exactly one command line in stdout and stderr
+    ((name, properties, message),) = runner_commands(captured.out, captured.err)
+    assert name == 'error' and properties['file'] == SPECIAL      # which the runner unescapes to the path
+    assert properties == {'file': SPECIAL, 'line': '1', 'endLine': '1', 'title': f'[P1, new] {EVAL}'}
+    assert message == f'{EVAL}\nRule: js-dangerous-eval, CWE-95'
+
+
+@pytest.mark.parametrize('name', [
+    'c\rd.js',                                    # a carriage return ends a line for the runner as well
+    '%0A::error::spoofed.js',                     # a line feed already written as its escape stays those four characters
+    '%250A%3A%2C%0D.js',
+    'e,line=9,title=spoofed.js',                  # would add properties
+    'f::error file=spoofed.js::spoofed.js',       # would end the properties
+    'dir,1\n::error::x/g:h%.js',                  # the same characters in a folder name
+    ' i .js',
+], ids=['carriage-return', 'escaped-line-feed', 'escapes', 'properties', 'separator', 'folder', 'spaces'])
+def test_github_annotations_escape_every_path_into_one_command_whose_file_is_that_path(tmp_path, monkeypatch,
+                                                                                    capsys, name):
+    project(tmp_path, {name: 'eval(code);', 'ok.js': 'eval(code);'})
+    monkeypatch.chdir(tmp_path)
+    assert scan_repo.main(['.', '--github-annotations']) == 1
+    captured = capsys.readouterr()
+    commands = runner_commands(captured.out, captured.err)
+    assert len(command_lines(captured)) == 2 and len(commands) == 2
+    assert sorted(properties['file'] for _, properties, _ in commands) == sorted([name, 'ok.js'])
+    for command, properties, message in commands:
+        assert command == 'error' and message == f'{EVAL}\nRule: js-dangerous-eval, CWE-95'
+        assert set(properties) == {'file', 'line', 'endLine', 'title'} and properties['title'] == f'[P1, new] {EVAL}'
+        assert (properties['line'], properties['endLine']) == ('1', '1') and (tmp_path / properties['file']).is_file()
+
+
+def test_github_annotations_file_is_the_scanned_directory_joined_with_the_finding_path(tmp_path, monkeypatch, capsys):
+    workspace = project(tmp_path / 'work space', {'svc,1:x%/api/app.js': 'eval(code);', 'app.js': 'eval(code);'})
+    monkeypatch.chdir(workspace)
+    for directory, files in (('.', ['app.js', 'svc,1:x%/api/app.js']),
+                             ('svc,1:x%', ['svc,1:x%/api/app.js']),
+                             ('./svc,1:x%/api/', ['svc,1:x%/api/app.js']),
+                             (str(workspace / 'svc,1:x%'), [f'{workspace}/svc,1:x%/api/app.js'])):
+        assert scan_repo.main([directory, '--github-annotations']) == 1
+        captured = capsys.readouterr()
+        assert [properties['file'] for _, properties, _ in runner_commands(captured.out, captured.err)] == files
+        # A runner reads a relative file from the workspace, where the command ran.
+        assert all((workspace / file).is_file() for file in files)
+        if directory == 'svc,1:x%':
+            assert '\n::error file=svc%2C1%3Ax%25/api/app.js,line=1,endLine=1,title=' in captured.out
+
+
+@pytest.mark.parametrize('base', [[], ['--base', 'main']], ids=['full', 'base'])
+def test_github_annotations_with_json_exits_two_with_a_usage_error(tmp_path, base):
+    root = repository(tmp_path / 'repo')
+    sarif, summary = tmp_path / 'out.sarif', tmp_path / 'summary.md'
+    for arguments in (['--github-annotations', '--json'], ['--json', '--github-annotations'],
+                      ['--json', '--github-annotations', '--sarif', sarif, '--markdown', summary]):
+        result = command_line(root, *base, *arguments)
+        assert result.returncode == 2, result.stderr
+        assert result.stdout == '' and not sarif.exists() and not summary.exists()          # no result
+        assert result.stderr.startswith('usage: scan_repo.py ')
+        assert 'scan_repo.py: error: --github-annotations cannot be used with --json' in result.stderr
+        assert 'unrecognized arguments' not in result.stderr
+    # Each of the two alone is accepted.
+    assert command_line(root, *base, '--json').returncode == 1
+    assert command_line(root, *base, '--github-annotations').returncode == 1
+
+
+def test_github_annotations_scanner_or_git_error_exits_two_and_prints_no_workflow_command(tmp_path, monkeypatch,
+                                                                                         capsys):
+    root = repository(tmp_path / 'repo')
+
+    def no_command(arguments, error):
+        assert scan_repo.main([str(root), '--github-annotations', *arguments]) == 2
+        captured = capsys.readouterr()
+        assert captured.out == '' and error in captured.err and 'no result issued' in captured.err
+        assert runner_commands(captured.out, captured.err) == [] and command_lines(captured) == []
+
+    def broken(*a, **k):
+        raise runner.SemgrepInvocationError(65, ['semgrep'], '', 'Scanner skipped requested source files')
+
+    def refuse(*a, **k):
+        raise scan_repo.DiffError('fatal: bad object', 128)
+
+    # The same scans print a command per finding when nothing goes wrong.
+    for arguments, findings in (([], 5), (['--base', 'main'], 4)):
+        assert scan_repo.main([str(root), '--github-annotations', *arguments]) == 1
+        captured = capsys.readouterr()
+        assert len(runner_commands(captured.out, captured.err)) == findings
+    no_command(['--base', 'no-such-branch'], 'cannot diff against no-such-branch')        # git: no such ref
+    with monkeypatch.context() as m:                                                       # git cannot run
+        m.setattr(scan_repo.subprocess, 'run', lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError('git')))
+        no_command(['--base', 'main'], 'cannot diff against main')
+    with monkeypatch.context() as m:                                                       # git: the base versions
+        m.setattr(scan_repo, 'base_findings', refuse)
+        no_command(['--base', 'main'], 'cannot read the base versions from main')
+    with monkeypatch.context() as m:                                                       # the scanner
+        m.setattr(scan_repo, 'run_semgrep', broken)
+        no_command([], 'scan incomplete')
+        no_command(['--base', 'main'], 'scan incomplete')
+    no_command(['--sarif', str(tmp_path / 'no such folder' / 'out.sarif')], 'could not write the SARIF file')
+    (root / 'big.js').write_text('x' * (1024 * 1024 + 1))                                  # over the per-file limit
+    no_command([], 'over the 1 MiB per-file scan limit')
+
+
+def test_without_github_annotations_the_output_is_unchanged_and_the_flag_only_adds_lines_after_the_report(tmp_path,
+                                                                                                         capsys):
+    root = introduced_elsewhere(tmp_path / 'repo')
+    runs = {}
+    for name, flag in (('without', []), ('with', ['--github-annotations'])):
+        summary, sarif = tmp_path / f'{name}.md', tmp_path / f'{name}.sarif'
+        assert scan_repo.main([str(root), '--base', 'main', '--markdown', str(summary), '--sarif', str(sarif),
+                               *flag]) == 1
+        runs[name] = (capsys.readouterr(), summary.read_bytes(), sarif.read_bytes())
+    (without, *written), (flagged, *written_with_the_flag) = runs['without'], runs['with']
+    assert without.out == BASE_REPORT.format(directory=root) and without.err == ''     # what 2.2.0 printed
+    assert runner_commands(without.out, without.err) == [] and command_lines(without) == []
+    assert flagged.out.startswith(without.out) and flagged.err == ''
+    assert flagged.out[len(without.out):].count('\n') == 1 and len(command_lines(flagged)) == 1
+    assert written_with_the_flag == written                 # the same Markdown summary and SARIF file
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1
+    captured = capsys.readouterr()
+    assert captured.out == base_json(root, 'server.js', 'failure', [BASE_FINDING]) and captured.err == ''
+    # Nothing to scan: nothing to annotate, and the same report.
+    empty = project(tmp_path / 'docs', {'README.md': 'nothing to scan'})
+    assert scan_repo.main([str(empty)]) == 0
+    report = capsys.readouterr().out
+    assert scan_repo.main([str(empty), '--github-annotations']) == 0
+    assert capsys.readouterr().out == report
+
+
+def test_github_annotations_base_fixture_one_new_one_pre_existing_yields_matching_levels_without_changing_the_gate(
+        tmp_path, monkeypatch, capsys):
+    root = new_and_pre_existing(tmp_path)
+    monkeypatch.chdir(root)
+    assert scan_repo.main(['.', '--base', 'main', '--json']) == 1
+    new, old = json.loads(capsys.readouterr().out)['findings']
+    assert (new['rule_id'], new['priority'], new['new']) == ('py-os-system', 'P1', True)
+    assert (old['rule_id'], old['priority'], old['new']) == ('py-os-popen', 'P1', False)
+    assert scan_repo.main(['.', '--base', 'main']) == 1                                # the gate fails on the new P1
+    report = capsys.readouterr().out
+    assert scan_repo.main(['.', '--base', 'main', '--github-annotations']) == 1       # and fails the same way
+    captured = capsys.readouterr()
+    assert captured.out.startswith(report) and captured.err == ''
+    assert captured.out[len(report):] == (
+        f"::error file=src/legacy.py,line=4,endLine=4,title=[P1%2C new] {new['title']}"
+        f"::{new['message']}%0ARule: py-os-system, CWE-78\n"
+        f"::notice file=src/legacy.py,line=2,endLine=2,title=[P1%2C pre-existing] {old['title']}"
+        f"::{old['message']}%0ARule: py-os-popen, CWE-78\n")
+    # With only the pre-existing finding left the gate passes, with and without the flag, and it is still a notice.
+    git(root, 'switch', '-q', 'main')
+    git(root, 'switch', '-q', '-c', 'docs-only')
+    project(root, {'src/legacy.py': "import os\nos.popen('ls')\n# reviewed"})
+    git(root, 'commit', '-q', '-am', 'comment')
+    assert scan_repo.main(['.', '--base', 'main']) == 0
+    report = capsys.readouterr().out
+    assert '**Gate: PASS**' in report
+    assert scan_repo.main(['.', '--base', 'main', '--github-annotations']) == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith(report)
+    assert [(name, properties['file'], properties['line'])
+            for name, properties, _ in runner_commands(captured.out, captured.err)] == [('notice', 'src/legacy.py', '2')]
+
+
+# What a pull request controls is the file names; the finding text comes from the service-owned rules. Both
+# are escaped the same way, so the scanner is replaced here to give every finding hostile text too.
+HOSTILE_NAMES = [
+    *HOSTILE,
+    'd\x0b::error::spoofed.js', 'e ::error::spoofed.js', 'f\x85::error::spoofed.js',     # other line ends
+    'g,line=9,title=spoofed::spoofed.js',
+    'h%0A::error::spoofed.js',
+    'i\n  ::error file=spoofed.js,line=1::spoofed\r\n::notice::spoofed/##[error]spoofed/j.js',
+]
+HOSTILE_TEXT = ('eval\n::error file=spoofed.js,line=1,title=spoofed::spoofed\r::warning::spoofed\r\n  ::notice::spoofed '
+                '##[error]spoofed %0A::error::spoofed\x0b::error::spoofed ::error::spoofed\x85::error::spoofed, '
+                'title=spoofed::spoofed')
+
+
+def carried(text):
+    """Text as an annotation carries it: line feeds and carriage returns survive, the other characters
+    log_safe() replaces do not."""
+    return re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f\x7f-\x9f  ]', '?', text).replace('##[', '#?[')
+
+
+@pytest.mark.parametrize('base', [[], ['--base', 'main']], ids=['full', 'base'])
+def test_hostile_file_names_and_finding_text_cannot_create_an_extra_workflow_command(tmp_path, monkeypatch, capsys,
+                                                                                    base):
+    names = sorted(HOSTILE_NAMES)
+    root = project(tmp_path, dict.fromkeys(names, 'eval(code);'))
+    monkeypatch.setattr(scan_repo, 'changes_since', lambda root, base: (dict.fromkeys(names), {}, []))
+    monkeypatch.setattr(scan_repo, 'run_semgrep',
+                        lambda paths, *a, **k: [scanner_finding(path, 1, text=HOSTILE_TEXT) for path in paths])
+    assert scan_repo.main([str(root), *base, '--github-annotations']) == 1
+    captured = capsys.readouterr()
+    # In the whole of stdout and stderr, the only lines of a workflow-command form are the annotation lines:
+    # one per finding, at the end of stdout.
+    lines = command_lines(captured)
+    assert len(lines) == len(names) == 9
+    assert captured.out.splitlines()[-len(names):] == lines and captured.err == ''
+    assert all(line.startswith('::error file=') and '##[' not in line for line in lines)
+    assert not re.search(r'[\x00-\x09\x0b-\x1f\x7f-\x9f  ]', captured.out)     # and no control character
+    # Read as the runner reads them, they are exactly those commands, each with the finding's own values.
+    commands = runner_commands(captured.out, captured.err)
+    assert len(commands) == len(names)
+    for (command, properties, message), name in zip(commands, names):
+        assert command == 'error' and set(properties) == {'file', 'line', 'endLine', 'title'}
+        assert properties['file'] == carried(f'{root}/{name}')
+        assert (properties['line'], properties['endLine']) == ('1', '1')
+        assert properties['title'] == carried(f'[P1, new] {HOSTILE_TEXT}'[:255])
+        assert message == carried(f'{HOSTILE_TEXT}\nRule: js-dangerous-eval, CWE-95')
+    # Without the flag the same scan prints no command at all.
+    assert scan_repo.main([str(root), *base]) == 1
+    assert command_lines(capsys.readouterr()) == []
+
+
+# The Action's `annotations` input (F-1.4): "true" adds --github-annotations, "false" (the default) adds
+# nothing, and any other value stops the step before the scan. The step runs here as for `timeout` above.
+
+def test_action_declares_an_optional_annotations_input_with_the_default_false():
+    declared = action_definition()['inputs']['annotations']
+    assert declared['default'] == 'false' and not declared.get('required') and declared['description']
+
+
+@ACTION_BASES
+def test_action_annotations_true_adds_the_flag_and_false_leaves_the_arguments_unchanged(tmp_path, scan_step, inputs,
+                                                                                       base_ref, base_arguments):
+    for annotations, added in (({}, []), ({'annotations': 'false'}, []),
+                               ({'annotations': 'true'}, ['--github-annotations']),
+                               ({'annotations': 'true', 'timeout': '600', 'sarif': 'out.sarif'},
+                                ['--timeout', '600', '--sarif', 'out.sarif', '--github-annotations'])):
+        result = scan_step(tmp_path, stub=True, base_ref=base_ref, **inputs, **annotations)
+        assert result.returncode == 0, result.stderr
+        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), str(tmp_path), '--markdown',
+                                    str(result.report), *base_arguments, *added], annotations
+
+
+@pytest.mark.parametrize('base', ['main', 'none'], ids=['base-ref', 'base-none'])
+def test_action_annotations_value_other_than_true_or_false_exits_two_before_scanning(tmp_path, scan_step, base):
+    root = pre_existing_only(tmp_path / 'checkout')
+    for value in ('', 'yes', 'no', '1', '0', 'True', 'FALSE', ' true', 'true ', 'true\n', 'true false', 'true --json',
+                  '--github-annotations', '*', '::error::spoofed', '##[error]spoofed',
+                  'true; touch "$RUNNER_TEMP/ran" $(touch "$RUNNER_TEMP/ran") `touch "$RUNNER_TEMP/ran"`'):
+        result = scan_step(root, base=base, annotations=value)
+        assert result.returncode == 2, (value, result.stderr)
+        assert result.arguments is None, value                   # before scanning: scan_repo.py never ran
+        assert result.stdout == '' and result.summary is None and not result.report.exists(), value     # no result
+        assert result.stderr == 'error: the annotations input must be "true" or "false", no result issued.\n', value
+        assert not (result.runner_temp / 'ran').exists(), value
+    for value, code in (('true', 0), ('false', 0)) if base == 'main' else (('true', 1), ('false', 1)):
+        assert scan_step(root, base=base, annotations=value).returncode == code, value
+
+
+def test_action_annotations_reaches_the_script_only_through_an_environment_variable():
+    assert [value for value in action_scan_step()['env'].values() if 'annotations' in value] == \
+        ['${{ inputs.annotations }}']
+    assert (ROOT / 'action.yml').read_text().count('inputs.annotations') == 1
+    for step in action_definition()['runs']['steps']:
+        assert '${{' not in step.get('run', ''), f"{step['name']}: an expression is expanded inside the run script"
+
+
+@FULL_AND_BASE
+def test_action_annotations_true_prints_the_commands_of_the_command_line_without_changing_the_gate_or_the_summary(
+        tmp_path, scan_step, base, code, labels):
+    root = pre_existing_only(tmp_path / 'check out')
+    base_arguments = [] if base == 'none' else ['--base', base]
+    without = scan_step(root, base=base)
+    assert without.returncode == code, without.stderr
+    assert runner_commands(without.stdout, without.stderr) == []          # the default prints no command
+    result = scan_step(root, base=base, annotations='true')
+    assert result.returncode == code, result.stderr                       # the gate is unchanged
+    assert result.arguments[6:] == [*base_arguments, '--github-annotations']
+    assert (result.summary, result.stderr) == (without.summary, without.stderr)
+    assert result.stdout.startswith(without.stdout)                       # the report, then the commands
+    by_command_line = command_line(root, *base_arguments, '--github-annotations')
+    assert (by_command_line.returncode, by_command_line.stdout) == (code, result.stdout)
+    commands = runner_commands(result.stdout, result.stderr)
+    assert [name for name, _, _ in commands] == [{'note': 'notice'}.get(level, level) for _, _, level in labels]
+    for (_, properties, message), (rule, new, _) in zip(commands, labels):
+        assert f'\nRule: {rule}, ' in message
+        assert properties['title'].startswith('[P1, new] ' if new and rule == 'py-os-popen' else
+                                              '[P2, new] ' if new else '[P1, pre-existing] ')
+        assert Path(properties['file']).is_file()
+
+
+def test_action_annotations_file_is_the_path_input_joined_with_the_finding_path_so_it_resolves_against_the_workspace(
+        tmp_path, scan_step):
+    workspace = introduced_elsewhere(tmp_path / 'work space', folder='svc/api/')
+    for path, file in (('svc/api', 'svc/api/server.js'), ('./svc/api/', 'svc/api/server.js'),
+                       ('svc', 'svc/api/server.js'), ('.', 'svc/api/server.js'),
+                       # An absolute path stays absolute; the runner itself makes it relative to the workspace.
+                       (str(workspace / 'svc'), f'{workspace}/svc/api/server.js')):
+        result = scan_step(path, cwd=workspace, base='main', annotations='true')
+        assert result.returncode == 1, result.stderr
+        ((name, properties, _),) = runner_commands(result.stdout, result.stderr)
+        assert (name, properties['file'], properties['line'], properties['endLine']) == ('error', file, '4', '4')
+        assert (workspace / properties['file']).is_file()          # the file the annotation lands on
+        assert result.stdout.count('\n::error file=') == 1
+
+
+def test_hostile_file_names_cannot_create_an_extra_workflow_command_in_the_actions_step_output(tmp_path, scan_step):
+    # The real scanner on real files: the whole step output, as a runner would read it.
+    names = sorted([*HOSTILE, SPECIAL, 'g,line=9,title=spoofed::spoofed.js', 'h%0A::error::spoofed.js',
+                    'i\n  ::error file=spoofed.js,line=1::spoofed\r::notice::spoofed/j.js'])
+    workspace = project(tmp_path / 'work space', dict.fromkeys(names, 'eval(code);'))
+    result = scan_step('.', cwd=workspace, base='none', annotations='true')
+    assert result.returncode == 1, result.stderr
+    lines = command_lines(SimpleNamespace(out=result.stdout, err=result.stderr))
+    assert len(lines) == len(names) == 7 and result.stdout.split('\n')[-len(names) - 1:-1] == lines
+    assert all(line.startswith('::error file=') and '##[' not in line for line in lines)
+    commands = runner_commands(result.stdout, result.stderr)
+    assert [(command, carried(name)) for command, name in zip(['error'] * 7, names)] == \
+        [(command, properties['file']) for command, properties, _ in commands]
+    assert all(message == f'{EVAL}\nRule: js-dangerous-eval, CWE-95' for _, _, message in commands)
+
+
+def test_readme_documents_the_github_annotations_flag_and_the_annotations_input_with_its_default():
+    readme = (ROOT / 'README.md').read_text()
+    usage = next(line for line in readme.splitlines() if line.startswith('scan_repo.py DIRECTORY '))
+    assert '[--github-annotations]' in usage and '`--github-annotations`' in readme
+    section = readme_github_action()
+    rows = [line for line in section.splitlines() if line.startswith('| `annotations` |')]
+    assert len(rows) == 1, 'the inputs table of README "GitHub Action" needs one `annotations` row'
+    default = json.dumps(action_definition()['inputs']['annotations']['default'])    # "false", as the README writes it
+    assert rows[0].startswith(f'| `annotations` | `{default}` |') and '`--github-annotations`' in rows[0]
+    assert f'    annotations: {default} ' in section, 'the workflow example shows the default too'
