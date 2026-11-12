@@ -54,7 +54,7 @@ Goal: Users can export SARIF, diagnose missing base history and use the existing
 
 ### F-1.2 Actionable errors when the `--base` history is missing
 
-- Status: planned
+- Status: done
 - Why: Without base history (`fetch-depth: 0`), `scan_repo.py` says only "cannot diff against origin/main, no result issued." and "git rev-parse failed", or git's "no merge base" text, with no hint.
 - Acceptance:
   - Without the ref, `scan_repo.py DIR --base origin/missing` exits 2 with no result; stderr names the ref, says it is not a commit in this checkout, and mentions `git fetch` and `fetch-depth: 0`.
