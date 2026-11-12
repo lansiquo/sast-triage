@@ -118,7 +118,7 @@ Done when: a real PR is scanned end to end in durable mode on the host, worker r
 
 | ID | Item | Size | Status | Owner | Acceptance |
 |---|---|---|---|---|---|
-| F-2.1 | Decide hosting and trust | S | planned | Needs owner | A decision document records one option and each yes/no. |
+| F-2.1 | Decide hosting and trust | S | done | Needs owner | A decision document records one option and each yes/no. |
 | F-2.2 | Decide the durable scanner path | S | planned | Needs owner | A decision record names one scanner, exact version and required compatibility evidence. |
 | F-2.3 | Make the go-live evidence checklist reviewable | M | planned | Needs owner | Every required release verification has an expected result and a NOT_RUN evidence field. |
 | F-2.4 | Prepare a locally installable CLI package | M | planned | Needs owner | An offline-built wheel's entry point scans `tests/fixtures/project` with exit 1. |
