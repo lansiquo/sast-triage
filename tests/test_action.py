@@ -88,9 +88,10 @@ def run_scripts():
 
 
 def run_step(name, workspace, runner_temp, **variables):
-    """Run one step as GitHub's `shell: bash` does, from the checkout."""
+    """Run one step as GitHub's `shell: bash` does, from the checkout. A variable given as None is left unset."""
     env = {key: os.environ[key] for key in ('HOME', 'PATH', 'LANG', 'TZ') if key in os.environ}
     env.update({'RUNNER_TEMP': str(runner_temp), **variables})
+    env = {key: value for key, value in env.items() if value is not None}
     return subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', run_scripts()[name]],
                           cwd=workspace, env=env, capture_output=True, text=True, timeout=300)
 
@@ -147,19 +148,39 @@ def test_install_step_runs_no_module_from_the_scanned_checkout(tmp_path):
     assert (runner_temp / 'sast-triage-venv' / 'pyvenv.cfg').is_file()
 
 
-def test_scan_step_runs_no_module_from_the_scanned_checkout(tmp_path):
-    workspace = project(tmp_path, 'const total = eval(req.body.preTax);\n')
+def scan_checkout(tmp_path, workspace, **variables):
+    """Run the Scan step from the checkout with the installed test environment: its result and summary."""
     runner_temp = tmp_path / 'runner_temp'
     runner_temp.mkdir()
     (runner_temp / 'sast-triage-venv').symlink_to(sys.prefix, target_is_directory=True)
-    markers = tmp_path / 'markers'
-    plant_modules(workspace, markers, 'argparse', 'tempfile', 'analyzers', 'trusted_rules', 'certifi')
     summary = tmp_path / 'summary.md'
-
     result = run_step('Scan', workspace, runner_temp, GITHUB_ACTION_PATH=str(ROOT),
                       GITHUB_STEP_SUMMARY=str(summary), SAST_PATH='.', SAST_BASE='none', SAST_TIMEOUT='',
-                      SAST_SARIF='', PRSEC_LOAD_DOTENV='0', PRSEC_MODE='local', PRSEC_SCANNER_BACKEND='local')
+                      SAST_SARIF='', PRSEC_LOAD_DOTENV='0', PRSEC_MODE='local', PRSEC_SCANNER_BACKEND='local',
+                      **variables)
+    return result, summary.read_bytes() if summary.exists() else b''
+
+
+# A job can set PYTHONPATH for its own code, and a relative entry such as "." is then the scanned checkout.
+@pytest.mark.parametrize('variables', [{}, {'PYTHONPATH': '.'}], ids=['default', 'PYTHONPATH'])
+def test_scan_step_runs_no_module_from_the_scanned_checkout(tmp_path, variables):
+    workspace = project(tmp_path, 'const total = eval(req.body.preTax);\n')
+    markers = tmp_path / 'markers'
+    plant_modules(workspace, markers, 'argparse', 'tempfile', 'analyzers', 'trusted_rules', 'certifi')
+
+    result, summary = scan_checkout(tmp_path, workspace, **variables)
 
     assert ran(markers) == [], f'the scan step ran {ran(markers)} from the scanned checkout'
     assert result.returncode == 1, result.stderr
-    assert b'**Gate: FAIL**' in summary.read_bytes()
+    assert b'**Gate: FAIL**' in summary
+
+
+# The scan step's Python reads no PYTHON* variable, so the report's encoding comes from the locale alone.
+@pytest.mark.parametrize('lang', ['C.UTF-8', None], ids=['LANG=C.UTF-8', 'LANG-unset'])
+def test_scan_step_writes_a_utf8_summary_without_python_variables(tmp_path, lang):
+    workspace = project(tmp_path, 'const total = eval(req.body.preTax);\n')
+
+    result, summary = scan_checkout(tmp_path, workspace, LANG=lang)
+
+    assert result.returncode == 1, result.stderr
+    assert '**Gate: FAIL** \u2014 1 new P1 finding'.encode('utf-8') in summary
