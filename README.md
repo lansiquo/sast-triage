@@ -164,7 +164,7 @@ In a workflow that runs on `pull_request`:
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0               # the base branch's history, to diff against it
-- uses: lansiquo/sast-triage@v2.3.0
+- uses: lansiquo/sast-triage@v2.4.0
   with:
     path: .                      # directory to scan
     base: ""                     # default: the pull request's base branch; "none" for a full scan
@@ -184,7 +184,7 @@ All four inputs are optional (defaults shown):
 On a pull request it scans the files changed since the base branch; on other events, or with `base: none`,
 it scans everything. The step fails when the gate fails and adds the summary to the job summary. It
 installs only `requirements-cli.txt` with the runner's Python and uses no other actions. Pin a release tag
-such as `@v2.3.0`, or a full commit SHA for the strictest supply-chain safety.
+such as `@v2.4.0`, or a full commit SHA for the strictest supply-chain safety.
 
 `timeout: 600` raises the scanner time limit from the default 300 seconds to 600, for a scan too large to
 finish in 300. A value that is not a whole number, such as `timeout: abc`, stops the step with exit status
@@ -211,7 +211,7 @@ jobs:
           fetch-depth: 0
       - run: rm -rf sast-triage.sarif          # anything already at the path is not this scan's result
       - id: scan
-        uses: lansiquo/sast-triage@v2.3.0
+        uses: lansiquo/sast-triage@v2.4.0
         with:
           sarif: sast-triage.sarif
       - if: ${{ !cancelled() && steps.scan.outcome != 'skipped' && hashFiles('sast-triage.sarif') != '' }}
