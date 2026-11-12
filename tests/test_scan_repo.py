@@ -402,3 +402,140 @@ def test_full_scan_exits_with_two_on_a_folder_without_read_permission(tmp_path, 
     finally:
         (root / 'src' / 'secret').chmod(0o755)
     assert 'no result issued' in capsys.readouterr().err
+
+
+# --sarif: write the triaged findings as SARIF 2.1.0 (F-1.1). Fixtures use ASCII paths only.
+
+def test_sarif_mirrors_the_json_findings_for_a_full_scan(tmp_path, capsys):
+    root = project(tmp_path)
+    out = tmp_path / 'out.sarif'
+    assert scan_repo.main([str(root), '--sarif', str(out), '--json']) == 1
+    report = json.loads(capsys.readouterr().out)
+    doc = json.loads(out.read_text())
+    assert doc['version'] == '2.1.0' and len(doc['runs']) == 1
+    run = doc['runs'][0]
+    assert run['tool']['driver']['name'] == 'sast-triage'
+    # each reported rule id once, in first-appearance order
+    assert [r['id'] for r in run['tool']['driver']['rules']] == \
+        list(dict.fromkeys(f['rule_id'] for f in report['findings']))
+    # one result per --json finding, in the same order, with the same fields
+    assert len(run['results']) == len(report['findings'])
+    for result, f in zip(run['results'], report['findings']):
+        location = result['locations'][0]['physicalLocation']
+        assert result['ruleId'] == f['rule_id']
+        assert location['artifactLocation']['uri'] == f['path'] and '\\' not in f['path']
+        assert location['region']['startLine'] == f['start_line']
+        assert location['region']['endLine'] == f['end_line']
+        assert result['partialFingerprints']['fingerprint'] == f['fingerprint']
+        assert result['properties'] == {'priority': f['priority'], 'new': f['new'],
+                                        'new_because': f['new_because'], 'cwe': f['cwe']}
+    # level follows the Check Run annotations: new P1 -> error, new P2 -> warning
+    assert [r['level'] for r in run['results']] == ['error', 'error', 'warning', 'warning']
+
+
+def test_sarif_labels_new_and_pre_existing_findings_with_base(tmp_path, capsys):
+    root = repository(tmp_path)
+    out = tmp_path / 'out.sarif'
+    assert scan_repo.main([str(root), '--base', 'main', '--sarif', str(out), '--json']) == 1
+    report = json.loads(capsys.readouterr().out)
+    results = json.loads(out.read_text())['runs'][0]['results']
+    by_json = {(f['path'], f['start_line'], f['rule_id']): f for f in report['findings']}
+    assert len(results) == len(report['findings'])
+    for result in results:
+        location = result['locations'][0]['physicalLocation']
+        f = by_json[(location['artifactLocation']['uri'], location['region']['startLine'], result['ruleId'])]
+        assert result['properties']['new'] == f['new']
+        assert result['properties']['new_because'] == f['new_because']
+    # the one pre-existing P1 is a note, not an error
+    preexisting = [r for r in results if r['properties']['new'] is False]
+    assert len(preexisting) == 1 and preexisting[0]['level'] == 'note'
+    assert preexisting[0]['properties']['priority'] == 'P1'
+
+
+def test_sarif_is_one_empty_run_when_there_is_nothing_to_scan(tmp_path):
+    root = project(tmp_path, {'README.md': 'nothing to scan'})
+    out = tmp_path / 'out.sarif'
+    assert scan_repo.main([str(root), '--sarif', str(out)]) == 0
+    doc = json.loads(out.read_text())
+    assert doc['version'] == '2.1.0' and len(doc['runs']) == 1
+    assert doc['runs'][0]['tool']['driver']['name'] == 'sast-triage'
+    assert doc['runs'][0]['results'] == []
+
+
+def test_sarif_is_not_written_on_a_scanner_or_size_error(tmp_path, monkeypatch, capsys):
+    root = project(tmp_path / 'repo', {'app.js': 'eval(code);'})
+    out = tmp_path / 'out.sarif'
+    out.write_bytes(b'OLD')                                   # an existing file must stay unchanged
+    def broken(*a, **k):
+        raise runner.SemgrepInvocationError(65, ['semgrep'], '', 'boom')
+    with monkeypatch.context() as m:
+        m.setattr(scan_repo, 'run_semgrep', broken)
+        assert scan_repo.main([str(root), '--sarif', str(out)]) == 2
+    assert 'scan incomplete' in capsys.readouterr().err
+    assert out.read_bytes() == b'OLD'                         # neither created nor overwritten
+    fresh = tmp_path / 'fresh.sarif'
+    (root / 'big.js').write_text('x' * (1024 * 1024 + 1))     # over the 1 MiB per-file limit
+    assert scan_repo.main([str(root), '--sarif', str(fresh)]) == 2
+    assert 'big.js' in capsys.readouterr().err and not fresh.exists()
+
+
+def test_sarif_does_not_change_the_other_output(tmp_path, capsys):
+    root = project(tmp_path)
+    assert scan_repo.main([str(root), '--json']) == 1
+    json_without = capsys.readouterr().out
+    assert scan_repo.main([str(root), '--json', '--sarif', str(tmp_path / 'a.sarif')]) == 1
+    assert capsys.readouterr().out == json_without
+    assert scan_repo.main([str(root)]) == 1
+    console_without = capsys.readouterr().out
+    assert scan_repo.main([str(root), '--sarif', str(tmp_path / 'b.sarif')]) == 1
+    assert capsys.readouterr().out == console_without
+    md_without, md_with = tmp_path / 'without.md', tmp_path / 'with.md'
+    scan_repo.main([str(root), '--markdown', str(md_without)]); capsys.readouterr()
+    scan_repo.main([str(root), '--markdown', str(md_with), '--sarif', str(tmp_path / 'c.sarif')]); capsys.readouterr()
+    assert md_without.read_text() == md_with.read_text()
+
+
+def test_sarif_unwritable_destination_exits_two_without_a_partial_artifact(tmp_path, capsys):
+    root = project(tmp_path, {'app.js': 'const a = 1;'})      # a clean scan that would otherwise exit 0
+    target = tmp_path / 'no_such_dir' / 'out.sarif'           # the parent directory does not exist
+    assert scan_repo.main([str(root), '--sarif', str(target)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and 'could not write the SARIF file' in captured.err
+    assert not target.exists() and not target.parent.exists()
+
+
+def test_sarif_is_written_when_only_the_base_version_scan_fails(tmp_path, monkeypatch, capsys):
+    # When only the base-version scan fails, the CLI warns, counts every finding as new and still
+    # issues a result (exit 1). AC7 forbids --sarif from changing the exit status, so FILE must be
+    # written and mirror --json, whether the destination is fresh or already exists.
+    root = repository(tmp_path)
+    real, calls = scan_repo.run_semgrep, []
+    def head_only(paths, repo_root, **options):
+        calls.append(repo_root)
+        if len(calls) > 1:                                  # the second scan is the base versions
+            raise runner.SemgrepInvocationError(2, ['semgrep'], '', 'the old version does not parse')
+        return real(paths, repo_root, **options)
+    monkeypatch.setattr(scan_repo, 'run_semgrep', head_only)
+
+    # same exit status with and without --sarif, and --json output is unchanged
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1
+    without = json.loads(capsys.readouterr().out)
+    calls.clear()
+    fresh = tmp_path / 'fresh.sarif'
+    assert scan_repo.main([str(root), '--base', 'main', '--json', '--sarif', str(fresh)]) == 1
+    with_sarif = json.loads(capsys.readouterr().out)
+    assert with_sarif == without
+    assert with_sarif['findings'] and all(f['new'] for f in with_sarif['findings'])   # the fallback: every finding new
+
+    results = json.loads(fresh.read_text())['runs'][0]['results']
+    assert [r['ruleId'] for r in results] == [f['rule_id'] for f in with_sarif['findings']]
+    assert all(r['properties']['new'] is True for r in results)
+
+    # a pre-existing destination is overwritten with the issued result, not left stale
+    existing = tmp_path / 'old.sarif'
+    existing.write_bytes(b'OLD')
+    calls.clear()
+    assert scan_repo.main([str(root), '--base', 'main', '--sarif', str(existing)]) == 1
+    capsys.readouterr()
+    overwritten = json.loads(existing.read_text())['runs'][0]['results']
+    assert [r['ruleId'] for r in overwritten] == [f['rule_id'] for f in with_sarif['findings']]

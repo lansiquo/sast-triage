@@ -21,8 +21,8 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
-from analyzers.semgrep_runner import (NEW_LEGEND, SemgrepInvocationError, add_fingerprints, run_semgrep,
-                                      summarize_findings)
+from analyzers.semgrep_runner import (NEW_LEGEND, SemgrepInvocationError, _annotation_level, add_fingerprints,
+                                      run_semgrep, summarize_findings)
 from analyzers.triage import (NOT_IN_BASE, added_lines, baseline_counts, gate, is_source_path, is_test_path,
                               needs_base, triage)
 from trusted_rules import OFFLINE_RULESET
@@ -193,6 +193,62 @@ def markdown(findings, base=None):
     return summarize_findings(findings)[1].replace(NEW_LEGEND, meaning)
 
 
+# Check Run annotation level (analyzers.semgrep_runner) -> SARIF result level.
+SARIF_LEVEL = {'failure': 'error', 'warning': 'warning', 'notice': 'note'}
+
+
+def sarif_document(findings):
+    """A SARIF 2.1.0 document: one run of the service-owned rules, one result per triaged finding.
+
+    The results mirror the --json findings in the same order; each reported rule id
+    appears once in tool.driver.rules. The result level follows the Check Run
+    annotations (new P1 is an error, new P2 a warning, everything else a note).
+    """
+    rule_ids = list(dict.fromkeys(f['rule_id'] for f in findings))
+    results = []
+    for f in findings:
+        result = {
+            'ruleId': f['rule_id'],
+            'level': SARIF_LEVEL[_annotation_level(f)],
+            'message': {'text': f.get('message') or f.get('title') or f['rule_id']},
+            'locations': [{'physicalLocation': {
+                'artifactLocation': {'uri': f['path']},
+                'region': {'startLine': f['start_line'], 'endLine': f['end_line']}}}],
+            'properties': {'priority': f['priority'], 'new': f['new'],
+                           'new_because': f['new_because'], 'cwe': f.get('cwe')},
+        }
+        if f.get('fingerprint'):
+            result['partialFingerprints'] = {'fingerprint': f['fingerprint']}
+        results.append(result)
+    return {
+        '$schema': 'https://json.schemastore.org/sarif-2.1.0.json',
+        'version': '2.1.0',
+        'runs': [{'tool': {'driver': {'name': 'sast-triage',
+                                      'rules': [{'id': rule_id} for rule_id in rule_ids]}},
+                  'results': results}],
+    }
+
+
+def write_sarif(path: Path, document):
+    """Write the SARIF document atomically, so a failed write leaves no partial artifact.
+
+    The document is written to a temporary file in the destination's directory and
+    renamed into place only once it is complete. Any OSError (a missing or unwritable
+    directory) propagates with the destination untouched, and the temporary is removed.
+    """
+    text = json.dumps(document, indent=2) + '\n'
+    handle = tempfile.NamedTemporaryFile('w', dir=path.parent, prefix='.sarif_', suffix='.tmp',
+                                         delete=False, encoding='utf-8')
+    temporary = Path(handle.name)
+    try:
+        with handle:
+            handle.write(text)
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def skipped_note(skipped):
     """For the Markdown summary: the changed files a --base scan left out, so none are skipped silently."""
     if not skipped:
@@ -210,6 +266,8 @@ def main(argv=None):
                         help='scan only the files changed since this git ref (for example origin/main); '
                              'findings on lines they did not change are pre-existing')
     parser.add_argument('--markdown', type=Path, metavar='FILE', help='also write the Markdown summary to FILE')
+    parser.add_argument('--sarif', type=Path, metavar='FILE',
+                        help='also write the findings as a SARIF 2.1.0 file')
     parser.add_argument('--timeout', type=int, default=300, metavar='SECONDS',
                         help='scanner time limit (default: 300)')
     args = parser.parse_args(argv)
@@ -273,6 +331,13 @@ def main(argv=None):
 
     if args.markdown:
         args.markdown.write_text(markdown(findings, args.base) + skipped_note(skipped) + '\n')
+    if args.sarif:
+        try:
+            write_sarif(args.sarif, sarif_document(findings))
+        except OSError as error:
+            print(f'error: could not write the SARIF file {args.sarif}, no result issued.\n{error}',
+                  file=sys.stderr)
+            return ERROR
     scan = f'changes since {args.base}' if args.base else 'full: every finding counts as new'
     if args.json:
         print(json.dumps({'directory': str(args.directory), 'scan': scan, 'base': args.base,

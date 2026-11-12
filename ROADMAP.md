@@ -37,7 +37,7 @@ Goal: Users can export SARIF, diagnose missing base history and use the existing
 
 ### F-1.1 SARIF output from the command line (`--sarif FILE`)
 
-- Status: planned
+- Status: done
 - Why: README offers only the console report, `--json` and `--markdown`, and the Action only a job summary, so findings can't reach code scanning or other SARIF tools. CHANGELOG 0.1.2's upload workflow was removed in commit `39da7e6`, before v1.0.0. Serializing the existing triage result, this defines the finding model reused by F-3.1–F-3.4.
 - Acceptance:
   - `scan_repo.py DIR --sarif FILE` writes SARIF 2.1.0 JSON (`"version": "2.1.0"`): one run, `tool.driver.name` `sast-triage`, each reported rule ID once in `tool.driver.rules`, one result per `--json` finding for the same input, in the same order.
