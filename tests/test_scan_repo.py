@@ -1,10 +1,14 @@
 """Full-repository scan CLI: real Semgrep on a small fixture tree that is written, scanned and never executed."""
 import json
+import os
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 import scan_repo
 from analyzers import semgrep_runner as runner
@@ -704,3 +708,136 @@ def test_successful_base_scan_exit_status_and_output_are_unchanged(tmp_path, cap
     assert scan_repo.main([str(root), '--base', 'main', '--json']) == 0       # the gate passes: exit 0
     captured = capsys.readouterr()
     assert captured.out == base_json(root, 'other.js', 'success', []) and captured.err == ''
+
+
+# The Action's `timeout` input (F-1.3). The Scan step of action.yml runs here the way the runner runs it:
+# the inputs fill in the step's `env`, then bash runs its script. A stub interpreter records the arguments
+# scan_repo.py is given; when not stubbed it then runs them for the real exit status and summary.
+# ASCII names only.
+
+def action_definition():
+    return yaml.safe_load((ROOT / 'action.yml').read_text())
+
+
+def action_scan_step():
+    return next(step for step in action_definition()['runs']['steps'] if step['name'] == 'Scan')
+
+
+@pytest.fixture
+def scan_step(tmp_path):
+    """Run the Scan step for the given Action inputs; inputs left out keep their action.yml defaults.
+
+    Each run gets its own RUNNER_TEMP, and its interpreter records the arguments it is given. With
+    stub=True it does nothing else; otherwise it passes them on to the installed test environment, so the
+    suite does not pip install or use the network. base_ref is GITHUB_BASE_REF, set on pull request events."""
+    runs = []
+
+    def run(directory, stub=False, base_ref=None, **inputs):
+        values = {name: str(declared.get('default', '')) for name, declared in action_definition()['inputs'].items()}
+        values.update(inputs, path=str(directory))
+        step = action_scan_step()
+        runner_temp = tmp_path / f'runner temp {len(runs)}'
+        runs.append(runner_temp)
+        interpreter = runner_temp / 'sast-triage-venv' / 'bin' / 'python'
+        interpreter.parent.mkdir(parents=True)
+        interpreter.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$RUNNER_TEMP/arguments"\n'
+                               + ('' if stub else f'exec {shlex.quote(sys.executable)} "$@"\n'))
+        interpreter.chmod(0o755)
+        env = {key: os.environ[key] for key in ('HOME', 'PATH', 'LANG', 'TZ') if key in os.environ}
+        env.update({'RUNNER_TEMP': str(runner_temp), 'GITHUB_ACTION_PATH': str(ROOT),
+                    'GITHUB_STEP_SUMMARY': str(runner_temp / 'summary.md'), 'PRSEC_LOAD_DOTENV': '0',
+                    'PRSEC_MODE': 'local', 'PRSEC_SCANNER_BACKEND': 'local'})
+        if base_ref:
+            env['GITHUB_BASE_REF'] = base_ref
+        env.update({name: re.sub(r'\$\{\{ *inputs\.(\w+) *\}\}', lambda match: values[match[1]], value)
+                    for name, value in step.get('env', {}).items()})
+        result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', step['run']],
+                                cwd=ROOT, env=env, capture_output=True, text=True, timeout=300)
+        result.runner_temp = runner_temp
+        result.report = runner_temp / 'sast-triage.md'
+        result.summary = (runner_temp / 'summary.md').read_bytes() if (runner_temp / 'summary.md').exists() else None
+        result.arguments = (runner_temp / 'arguments').read_text().splitlines()
+        return result
+
+    return run
+
+
+def pre_existing_only(tmp_path):
+    """repository() on a branch whose one change leaves its P1 on an untouched line: main passes, a full scan fails."""
+    root = repository(tmp_path)
+    git(root, 'switch', '-q', 'main')
+    git(root, 'switch', '-q', '-c', 'docs-only')
+    project(root, {'src/legacy.py': "import os\nos.popen('ls')\n# reviewed"})
+    git(root, 'commit', '-q', '-am', 'comment')
+    return root
+
+
+def test_action_declares_an_optional_timeout_input_with_an_empty_default():
+    declared = action_definition()['inputs']['timeout']
+    assert declared['default'] == '' and not declared.get('required') and declared['description']
+
+
+@pytest.mark.parametrize('inputs,base_ref,base_arguments', [
+    ({'base': 'none'}, 'main', []),                              # base: none, a full scan even on a pull request
+    ({}, None, []),                                              # no base and no pull request: a full scan
+    ({'base': 'release'}, 'main', ['--base', 'release']),        # a base ref
+    ({}, 'main', ['--base', 'origin/main']),                     # a pull request's base branch
+], ids=['base-none', 'no-base', 'base-ref', 'pull-request-base'])
+def test_action_timeout_empty_keeps_todays_arguments_and_600_adds_timeout_600(tmp_path, scan_step, inputs, base_ref,
+                                                                             base_arguments):
+    for timeout, added in (({}, []), ({'timeout': ''}, []), ({'timeout': '600'}, ['--timeout', '600'])):
+        result = scan_step(tmp_path, stub=True, base_ref=base_ref, **inputs, **timeout)
+        assert result.returncode == 0, result.stderr
+        assert result.arguments == [str(ROOT / 'scan_repo.py'), str(tmp_path), '--markdown', str(result.report),
+                                    *base_arguments, *added], timeout
+
+
+def test_action_timeout_reaches_the_script_only_through_an_environment_variable(tmp_path, scan_step):
+    definition = action_definition()
+    assert [value for value in action_scan_step()['env'].values() if 'timeout' in value] == ['${{ inputs.timeout }}']
+    assert (ROOT / 'action.yml').read_text().count('inputs.timeout') == 1
+    for step in definition['runs']['steps']:
+        assert '${{' not in step.get('run', ''), f"{step['name']}: an expression is expanded inside the run script"
+    # The value stays one argument: bash does not split it, and never runs it.
+    hostile = '600 --json; touch "$RUNNER_TEMP/ran" $(touch "$RUNNER_TEMP/ran") `touch "$RUNNER_TEMP/ran"`'
+    result = scan_step(tmp_path, stub=True, timeout=hostile)
+    assert result.returncode == 0, result.stderr
+    assert result.arguments[-2:] == ['--timeout', hostile] and not (result.runner_temp / 'ran').exists()
+
+
+def test_readme_github_action_documents_the_timeout_input_and_its_default():
+    section = (ROOT / 'README.md').read_text().split('\n## GitHub Action\n')[1].split('\n## ')[0]
+    rows = [line for line in section.splitlines() if line.startswith('| `timeout` |')]
+    assert len(rows) == 1, 'the inputs table of README "GitHub Action" needs one `timeout` row'
+    default = json.dumps(action_definition()['inputs']['timeout']['default'])        # "", as the README writes it
+    assert rows[0].startswith(f'| `timeout` | `{default}` |') and '`--timeout`' in rows[0] and '300 seconds' in rows[0]
+    assert f'    timeout: {default} ' in section, 'the workflow example shows the default too'
+
+
+@pytest.mark.parametrize('base', ['main', 'none'], ids=['base-ref', 'base-none'])
+def test_action_timeout_that_is_not_a_whole_number_exits_two_with_no_result_as_the_command_line_does(tmp_path,
+                                                                                                    scan_step, base):
+    root = pre_existing_only(tmp_path / 'checkout')
+    for timeout in ('abc', '1.5', '10s', ' ', '600 --json', '--help'):
+        cli = command_line(root, '--timeout', timeout)
+        result = scan_step(root, base=base, timeout=timeout)
+        assert (cli.returncode, result.returncode) == (2, 2), (timeout, result.stderr)
+        assert 'scan_repo.py: error: argument --timeout: ' in result.stderr, timeout
+        assert result.stderr.splitlines()[-1] == cli.stderr.splitlines()[-1], timeout
+        assert result.stdout == '' and result.summary is None and not result.report.exists(), timeout
+
+
+@pytest.mark.parametrize('base,code,gate', [
+    ('main', 0, b'**Gate: PASS**'),          # a base ref: the P1 is on an untouched line, so pre-existing
+    ('none', 1, b'**Gate: FAIL**'),          # base: none: a full scan, where every finding is new
+], ids=['base-ref', 'base-none'])
+def test_action_timeout_leaves_the_base_arguments_and_gate_result_unchanged(tmp_path, scan_step, base, code, gate):
+    root = pre_existing_only(tmp_path / 'checkout')
+    base_arguments = [] if base == 'none' else ['--base', base]
+    empty = scan_step(root, base=base)
+    assert empty.returncode == code, empty.stderr
+    assert empty.arguments[4:] == base_arguments and gate in empty.summary
+    valid = scan_step(root, base=base, timeout='600')
+    assert valid.returncode == code, valid.stderr
+    assert valid.arguments[4:] == [*base_arguments, '--timeout', '600']
+    assert (valid.stdout, valid.summary) == (empty.stdout, empty.summary)
