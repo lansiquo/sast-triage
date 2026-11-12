@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **Write a SARIF file from the GitHub Action (`sarif` input).** `action.yml` has a new optional `sarif` input: a file path, which the Scan step passes to `scan_repo.py` as `--sarif`. For example, `sarif: sast-triage.sarif` writes the findings of the scan, a pull request's `--base` scan or a full scan, to `sast-triage.sarif` in the workspace: the file `scan_repo.py --sarif` writes. Left empty (the default, `""`), the step runs `scan_repo.py` with the same arguments as before. The file is written only when the scan issues a result (exit status 0 or 1). A scan that stops with exit status 2 creates no file and leaves an existing one unchanged, and a path that can't be written, or one that starts with a dash, stops the step with exit status 2 and no partial file. The Action does not upload the file and still uses no token and no other actions: README "GitHub Action" shows the upload as a separate step of your own workflow, pinned to a full commit SHA, which needs `security-events: write` and checks for a completed scan, so it never uploads a stale file. Like the other inputs, `sarif` reaches the step's script only through an environment variable. (F-1.5)
 
 ## [2.3.0] - 2026-11-11
 ### Added

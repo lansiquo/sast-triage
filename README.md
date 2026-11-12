@@ -169,15 +169,17 @@ In a workflow that runs on `pull_request`:
     path: .                      # directory to scan
     base: ""                     # default: the pull request's base branch; "none" for a full scan
     timeout: ""                  # scanner time limit in seconds; default: 300
+    sarif: ""                    # also write the findings to this SARIF file; default: no file
 ```
 
-All three inputs are optional (defaults shown):
+All four inputs are optional (defaults shown):
 
 | Input | Default | Meaning |
 |---|---|---|
 | `path` | `.` | Directory to scan |
 | `base` | `""` | Git ref to compare with. Empty: the pull request's base branch, or a full scan on other events. `none`: always a full scan |
 | `timeout` | `""` | Scanner time limit in seconds, passed to `scan_repo.py` as `--timeout`. Empty: its default of 300 seconds |
+| `sarif` | `""` | File to also write the findings to as SARIF 2.1.0, passed to `scan_repo.py` as `--sarif`. A relative path is relative to the workspace. Empty: no SARIF file |
 
 On a pull request it scans the files changed since the base branch; on other events, or with `base: none`,
 it scans everything. The step fails when the gate fails and adds the summary to the job summary. It
@@ -187,6 +189,46 @@ such as `@v2.3.0`, or a full commit SHA for the strictest supply-chain safety.
 `timeout: 600` raises the scanner time limit from the default 300 seconds to 600, for a scan too large to
 finish in 300. A value that is not a whole number, such as `timeout: abc`, stops the step with exit status
 2 and no summary, as `scan_repo.py --timeout abc` does.
+
+`sarif: sast-triage.sarif` also writes the findings to `sast-triage.sarif` in the workspace, the file
+`scan_repo.py --sarif` writes. The Action does not upload it: sast-triage itself still uses no token and no
+other actions. To show the findings in GitHub code scanning, upload the file in a separate step of your own
+workflow, pinned to a full commit SHA, in a job that has `security-events: write`:
+
+```yaml
+on: pull_request
+jobs:
+  sast-triage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read               # the checkout
+      security-events: write       # the upload step
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: rm -rf sast-triage.sarif          # anything already at the path is not this scan's result
+      - id: scan
+        uses: lansiquo/sast-triage@v2.3.0
+        with:
+          sarif: sast-triage.sarif
+      - if: ${{ !cancelled() && steps.scan.outcome != 'skipped' && hashFiles('sast-triage.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066   # v4.39.3
+        with:
+          sarif_file: sast-triage.sarif
+```
+
+The file is written only when the scan issues a result (exit status 0 or 1). A scan that stops with exit
+status 2 creates no file and leaves an existing one unchanged. A `sarif` path that can't be written, such
+as one in a folder that does not exist, or one that starts with a dash, also stops the step with exit
+status 2 and no SARIF file.
+
+The upload step checks for a completed scan, so it never uploads a stale file. The `rm` step leaves nothing
+at the path, so a file is there only when this run's scan exited with status 0 or 1. The step's `if` is
+false when the scan step was skipped or the file is missing (`hashFiles` is then empty), and true after a
+failed gate too. Use a path the repository does not use, since the `rm` step removes whatever is there.
+Paths in the file are relative to `path`; code scanning reads them from the repository root, which is the
+default `path: .`.
 
 ## How triage works
 
