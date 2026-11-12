@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- **The GitHub Action's install step could run Python code from the repository it scans; it no longer does.** The "Install the scanner" step started `python3 -m venv` and `python -m pip` in the workspace, where Python puts the working directory first on its import path, so a module in the checkout with the name of one they load ran inside the job and could end both steps as passed without a scan. Both commands now run in isolated mode (`-I`), which keeps the working directory off the import path and also makes them ignore `PYTHONPATH` and the other `PYTHON*` variables. Where the pull request author can edit the workflow this gave them nothing new; it matters where they cannot, such as a required workflow set by an organization. Versions 2.0.0 to 2.4.0 are affected. Scans, inputs and exit statuses (0, 1 and 2) are unchanged. [W-sast-triage-41] (GHSA-q2w8-rwmf-c9pg)
 
 ## [2.4.0] - 2026-11-12
 ### Added
