@@ -13,7 +13,8 @@ Durable mode will run as a self-hosted lab service on one dedicated Linux VM, se
 
 - The VM opens no inbound ports.
 - GitHub reaches the service at exactly one HTTPS webhook endpoint, through a tunnel that the VM opens outbound.
-- The App private key and the webhook secret are kept only in the VM's secret store, readable by the worker account alone.
+- The webhook secret and the GitHub App private key are kept only in the VM's secret store.
+- The webhook secret is readable only by the web listener's account, and the GitHub App private key only by the worker's account. No account holds both.
 - The GitHub App installation is narrowed to the repositories the service scans.
 
 ## Each question, yes or no
@@ -25,10 +26,13 @@ Durable mode will run as a self-hosted lab service on one dedicated Linux VM, se
 | One dedicated VM, separate from other workloads? | Yes |
 | Inbound ports open on the host? | No |
 | Exactly one HTTPS webhook endpoint, reachable through an outbound tunnel? | Yes |
-| App private key and webhook secret only in the host's secret store, readable by the worker account alone? | Yes |
+| Webhook secret and GitHub App private key kept only in the host's secret store? | Yes |
+| Webhook secret readable only by the web listener's account? | Yes |
+| GitHub App private key readable only by the worker's account? | Yes |
+| No account holds both secrets? | Yes |
 | App installation narrowed to the repositories it scans? | Yes |
 
-The sixth answer differs from the current design on one point, the webhook secret: see "Existing statements that differ", point 1.
+The split of the two secrets between the two accounts matches the existing design in [ARCHITECTURE.md](../../ARCHITECTURE.md) ("Trust boundaries") and [deploy/trust-boundaries.md](../../deploy/trust-boundaries.md) ("Credential ownership").
 
 ## Option not chosen
 
@@ -50,29 +54,18 @@ The other Step 2 items (F-2.2 to F-2.5) are separate decisions. The approval gat
 
 ## Existing statements that differ
 
-The decision was compared with [ARCHITECTURE.md](../../ARCHITECTURE.md) and the documents in `deploy/` as they stood on 2026-11-12. This record changes none of them. Three points differ.
+The decision was compared with [ARCHITECTURE.md](../../ARCHITECTURE.md) and the documents in `deploy/` as they stood on 2026-11-12. This record changes none of them. Two points differ, and each is a follow-up item for later work.
 
-### 1. Which account reads the webhook secret (not resolved here)
-
-The decision keeps the webhook secret readable by the worker account alone. The current design gives it to the web listener, which runs as a second account, and keeps it from the worker:
-
-- `ARCHITECTURE.md`, "Trust boundaries": the web listener "holds only the webhook secret and queue access, runs as its own OS user".
-- `deploy/README.md`, "Architecture", about the listener: "Holds the webhook secret, never the PEM."
-- `deploy/trust-boundaries.md`, "Credential ownership": the web listener "receives the webhook secret and verifies HMAC".
-- `deploy/production-operations.md`, "Configuration and isolated Linux acceptance": "Web must receive webhook secrets", and the worker must receive "no webhook secret". `deploy/check_environment.py` enforces both: `--role web` fails without a webhook secret, and `--role worker` fails with one.
-
-The App private key is not affected: in the decision and in the current design, only the worker account reads it. The two statements about the webhook secret cannot both hold, and this record does not choose between them. Which account reads it is an owner decision, needed before the webhook secret is placed on a host.
-
-### 2. Installation scope
+### 1. Installation scope
 
 - `deploy/README.md`, "Integration target": the installation "covers all the account's repositories with broad permissions", and "The App's private key is not limited".
 
 Both describe today's installation. Under the decision the installation covers only the repositories the service scans. They stay true until an approved App setting change, and are out of date after it. `ARCHITECTURE.md`, "Security controls" already says each installation token is narrowed to the deployment's one repository, which agrees with the decision.
 
-### 3. How the webhook endpoint is reached
+### 2. How the webhook endpoint is reached
 
 - `deploy/README.md`, "Architecture" and "Install and run": the listener is "behind an HTTPS proxy", and "Expose only the proxy's HTTPS listener". Neither says how GitHub reaches that listener. Under the decision it is through the outbound tunnel, never through an inbound port.
 - `deploy/README.md`, "Approval gates", gate 1: "no paid provider, tunnel or network expansion is authorized". Still true, because this record authorizes no tunnel setup, but a tunnel is now the chosen way in.
 - `deploy/README.md`, "Required release verification": "Check HTTPS `/health` and `/ready`". Under the decision the webhook is the only endpoint reachable from outside the VM, so `/health` and `/ready` cannot be checked through the public endpoint.
 
-Other documents in `deploy/` repeat these three points in their own words and are not listed one by one. Nothing else that was checked disagrees with the decision: the dedicated VM kept separate from other workloads, the worker as the only reader of the App private key, Uvicorn bound to the loopback interface, and the statements that no host or credential is provisioned.
+Other documents in `deploy/` repeat these two points in their own words and are not listed one by one. Nothing else that was checked disagrees with the decision: the dedicated VM kept separate from other workloads, the webhook secret held by the web listener and the App private key read only by the worker, Uvicorn bound to the loopback interface, and the statements that no host or credential is provisioned.
