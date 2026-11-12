@@ -995,7 +995,7 @@ def test_action_sarif_path_that_is_not_a_valid_argument_exits_two_before_the_sca
     root = pre_existing_only(tmp_path / 'check out')
     workspace = tmp_path / 'work space'
     workspace.mkdir()
-    for sarif in ('--json', '-o', '--sarif'):                    # a path can't start with a dash: write ./-o
+    for sarif in ('--json', '-o', '--sarif'):                    # values the command line reads as options
         cli = command_line(root, '--sarif', sarif)
         result = scan_step(root, base=base, sarif=sarif, cwd=workspace)
         assert (cli.returncode, result.returncode) == (2, 2), (sarif, result.stderr)

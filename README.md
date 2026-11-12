@@ -193,7 +193,8 @@ finish in 300. A value that is not a whole number, such as `timeout: abc`, stops
 `sarif: sast-triage.sarif` also writes the findings to `sast-triage.sarif` in the workspace, the file
 `scan_repo.py --sarif` writes. The Action does not upload it: sast-triage itself still uses no token and no
 other actions. To show the findings in GitHub code scanning, upload the file in a separate step of your own
-workflow, pinned to a full commit SHA, in a job that has `security-events: write`:
+workflow, pinned to a full commit SHA, in a job that has `security-events: write`. In a private repository
+the upload also needs `actions: read`:
 
 ```yaml
 on: pull_request
@@ -203,6 +204,7 @@ jobs:
     permissions:
       contents: read               # the checkout
       security-events: write       # the upload step
+      actions: read                # the upload step, only needed in a private repository
     steps:
       - uses: actions/checkout@v4
         with:
@@ -220,8 +222,9 @@ jobs:
 
 The file is written only when the scan issues a result (exit status 0 or 1). A scan that stops with exit
 status 2 creates no file and leaves an existing one unchanged. A `sarif` path that can't be written, such
-as one in a folder that does not exist, or one that starts with a dash, also stops the step with exit
-status 2 and no SARIF file.
+as one in a folder that does not exist, also stops the step with exit status 2 and no SARIF file. So does
+a value the command line reads as an option, such as `--json`; any other value that is not empty is used
+as the file's path.
 
 The upload step checks for a completed scan, so it never uploads a stale file. The `rm` step leaves nothing
 at the path, so a file is there only when this run's scan exited with status 0 or 1. The step's `if` is
