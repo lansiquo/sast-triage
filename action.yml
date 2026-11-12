@@ -53,7 +53,7 @@ runs:
         if [ -n "$SAST_SARIF" ]; then args+=(--sarif "$SAST_SARIF"); fi
         rm -f "$RUNNER_TEMP/sast-triage.md"
         set +e
-        "$RUNNER_TEMP/sast-triage-venv/bin/python" "$GITHUB_ACTION_PATH/scan_repo.py" "${args[@]}"
+        "$RUNNER_TEMP/sast-triage-venv/bin/python" -E -s "$GITHUB_ACTION_PATH/scan_repo.py" "${args[@]}"
         code=$?
         set -e
         if [ -f "$RUNNER_TEMP/sast-triage.md" ]; then cat "$RUNNER_TEMP/sast-triage.md" >> "$GITHUB_STEP_SUMMARY"; fi

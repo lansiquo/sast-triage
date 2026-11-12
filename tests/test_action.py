@@ -80,8 +80,9 @@ def test_action_error_without_previous_report_issues_no_summary(tmp_path, action
 
 
 # GitHub starts every step in the workspace, which is the scanned checkout. A Python started there with
-# -m or -c puts that folder first on its import path; -I (isolated mode) leaves it out. A script run by
-# its path gets the script's own folder there instead, so it must be one of the Action's own files.
+# -m or -c puts that folder first on its import path; -I (isolated mode) leaves it out and ignores
+# PYTHONPATH. A script run by its path gets the script's own folder there instead, so it must be one of
+# the Action's own files; -I would drop that folder too, so it takes -E -s, the rest of isolated mode.
 def run_scripts():
     steps = yaml.safe_load((ROOT / 'action.yml').read_text())['runs']['steps']
     return {step['name']: step['run'] for step in steps if 'run' in step}
@@ -129,6 +130,8 @@ def test_action_python_calls_cannot_import_from_the_scanned_checkout():
             assert '-I' in options, f'{command} needs -I, or it imports from the scanned checkout'
         else:
             assert target.startswith('$GITHUB_ACTION_PATH/'), f'{command} runs a script outside the Action'
+            assert '-I' in options or {'-E', '-s'} <= set(options), \
+                f'{command} needs -E -s, or PYTHONPATH can put the scanned checkout on its import path'
 
 
 def test_install_step_runs_no_module_from_the_scanned_checkout(tmp_path):
