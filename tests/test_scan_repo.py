@@ -796,8 +796,8 @@ def test_action_timeout_empty_keeps_todays_arguments_and_600_adds_timeout_600(tm
     for timeout, added in (({}, []), ({'timeout': ''}, []), ({'timeout': '600'}, ['--timeout', '600'])):
         result = scan_step(tmp_path, stub=True, base_ref=base_ref, **inputs, **timeout)
         assert result.returncode == 0, result.stderr
-        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), str(tmp_path), '--markdown',
-                                    str(result.report), *base_arguments, *added], timeout
+        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), '--markdown',
+                                    str(result.report), *base_arguments, *added, '--', str(tmp_path)], timeout
 
 
 def test_action_timeout_reaches_the_script_only_through_an_environment_variable(tmp_path, scan_step):
@@ -810,7 +810,7 @@ def test_action_timeout_reaches_the_script_only_through_an_environment_variable(
     hostile = '600 --json; touch "$RUNNER_TEMP/ran" $(touch "$RUNNER_TEMP/ran") `touch "$RUNNER_TEMP/ran"`'
     result = scan_step(tmp_path, stub=True, timeout=hostile)
     assert result.returncode == 0, result.stderr
-    assert result.arguments[-2:] == ['--timeout', hostile] and not (result.runner_temp / 'ran').exists()
+    assert result.arguments[-4:-2] == ['--timeout', hostile] and not (result.runner_temp / 'ran').exists()
 
 
 def test_readme_github_action_documents_the_timeout_input_and_its_default():
@@ -844,10 +844,10 @@ def test_action_timeout_leaves_the_base_arguments_and_gate_result_unchanged(tmp_
     base_arguments = [] if base == 'none' else ['--base', base]
     empty = scan_step(root, base=base)
     assert empty.returncode == code, empty.stderr
-    assert empty.arguments[6:] == base_arguments and gate in empty.summary
+    assert empty.arguments[5:-2] == base_arguments and gate in empty.summary
     valid = scan_step(root, base=base, timeout='600')
     assert valid.returncode == code, valid.stderr
-    assert valid.arguments[6:] == [*base_arguments, '--timeout', '600']
+    assert valid.arguments[5:-2] == [*base_arguments, '--timeout', '600']
     assert (valid.stdout, valid.summary) == (empty.stdout, empty.summary)
 
 
@@ -905,8 +905,8 @@ def test_action_sarif_empty_leaves_the_arguments_unchanged_and_a_path_adds_sarif
                          ({'sarif': absolute, 'timeout': '600'}, ['--timeout', '600', '--sarif', absolute])):
         result = scan_step(tmp_path, stub=True, base_ref=base_ref, **inputs, **sarif)
         assert result.returncode == 0, result.stderr
-        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), str(tmp_path), '--markdown',
-                                    str(result.report), *base_arguments, *added], sarif
+        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), '--markdown',
+                                    str(result.report), *base_arguments, *added, '--', str(tmp_path)], sarif
 
 
 def test_action_sarif_reaches_the_script_only_through_an_environment_variable(tmp_path, scan_step):
@@ -918,7 +918,7 @@ def test_action_sarif_reaches_the_script_only_through_an_environment_variable(tm
     hostile = 'out.sarif --json; touch "$RUNNER_TEMP/ran" $(touch "$RUNNER_TEMP/ran") `touch "$RUNNER_TEMP/ran"`'
     result = scan_step(tmp_path, stub=True, sarif=hostile)
     assert result.returncode == 0, result.stderr
-    assert result.arguments[-2:] == ['--sarif', hostile] and not (result.runner_temp / 'ran').exists()
+    assert result.arguments[-4:-2] == ['--sarif', hostile] and not (result.runner_temp / 'ran').exists()
 
 
 @FULL_AND_BASE
@@ -938,7 +938,7 @@ def test_action_sarif_writes_the_file_for_a_full_and_a_base_scan_at_a_path_with_
             ('scan results/sast triage.sarif', root / 'scan results' / 'sast triage.sarif')):
         result = scan_step(root, base=base, sarif=sarif, cwd=root)
         assert result.returncode == code, result.stderr
-        assert result.arguments[6:] == [*base_arguments, '--sarif', sarif]
+        assert result.arguments[5:-2] == [*base_arguments, '--sarif', sarif]
         # The same file the command line writes for this scan, and no other file beside it.
         assert written.read_bytes() == by_command_line.read_bytes()
         assert [path.name for path in written.parent.iterdir()] == ['sast triage.sarif']
@@ -968,7 +968,7 @@ def test_action_sarif_is_not_created_and_an_existing_file_is_unchanged_when_the_
     for name in ('fresh file.sarif', 'existing file.sarif'):
         result = scan_step(root, sarif=str(folder / name), **inputs)
         assert result.returncode == 2, result.stderr
-        assert result.arguments[-2:] == ['--sarif', str(folder / name)]
+        assert result.arguments[-4:-2] == ['--sarif', str(folder / name)]
         assert result.stdout == '' and result.summary is None and not result.report.exists()      # no result
         assert tree(folder) == before, name                  # nothing created, the existing file unchanged
 
@@ -1795,8 +1795,8 @@ def test_action_annotations_true_adds_the_flag_and_false_leaves_the_arguments_un
                                 ['--timeout', '600', '--sarif', 'out.sarif', '--github-annotations'])):
         result = scan_step(tmp_path, stub=True, base_ref=base_ref, **inputs, **annotations)
         assert result.returncode == 0, result.stderr
-        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), str(tmp_path), '--markdown',
-                                    str(result.report), *base_arguments, *added], annotations
+        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), '--markdown',
+                                    str(result.report), *base_arguments, *added, '--', str(tmp_path)], annotations
 
 
 @pytest.mark.parametrize('base', ['main', 'none'], ids=['base-ref', 'base-none'])
@@ -1833,7 +1833,7 @@ def test_action_annotations_true_prints_the_commands_of_the_command_line_without
     assert runner_commands(without.stdout, without.stderr) == []          # the default prints no command
     result = scan_step(root, base=base, annotations='true')
     assert result.returncode == code, result.stderr                       # the gate is unchanged
-    assert result.arguments[6:] == [*base_arguments, '--github-annotations']
+    assert result.arguments[5:-2] == [*base_arguments, '--github-annotations']
     assert (result.summary, result.stderr) == (without.summary, without.stderr)
     assert result.stdout.startswith(without.stdout)                       # the report, then the commands
     by_command_line = command_line(root, *base_arguments, '--github-annotations')

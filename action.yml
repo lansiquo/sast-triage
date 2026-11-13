@@ -55,7 +55,7 @@ runs:
         base="$SAST_BASE"
         if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then base="origin/$GITHUB_BASE_REF"; fi
         if [ "$base" = "none" ]; then base=""; fi
-        args=("$SAST_PATH" --markdown "$RUNNER_TEMP/sast-triage.md")
+        args=(--markdown "$RUNNER_TEMP/sast-triage.md")
         if [ -n "$base" ]; then args+=(--base "$base"); fi
         if [ -n "$SAST_TIMEOUT" ]; then args+=(--timeout "$SAST_TIMEOUT"); fi
         if [ -n "$SAST_SARIF" ]; then args+=(--sarif "$SAST_SARIF"); fi
@@ -66,7 +66,7 @@ runs:
         esac
         rm -f "$RUNNER_TEMP/sast-triage.md"
         set +e
-        "$RUNNER_TEMP/sast-triage-venv/bin/python" -E -s "$GITHUB_ACTION_PATH/scan_repo.py" "${args[@]}"
+        "$RUNNER_TEMP/sast-triage-venv/bin/python" -E -s "$GITHUB_ACTION_PATH/scan_repo.py" "${args[@]}" -- "$SAST_PATH"
         code=$?
         set -e
         if [ -f "$RUNNER_TEMP/sast-triage.md" ]; then cat "$RUNNER_TEMP/sast-triage.md" >> "$GITHUB_STEP_SUMMARY"; fi
