@@ -5,7 +5,7 @@ Owner: Robin. Adopted 2026-11-11.
 Owner-approved order of work for sast-triage. Items are built one at a time, lowest step first.
 Status changes only through merged pull requests.
 
-sast-triage is a diff-aware SAST gate for Python, JavaScript and TypeScript (CLI, GitHub Action, GitHub App; v2.6.1). This roadmap takes it to a multi-tool, multi-tenant platform: five quick wins (Step 1), then Robin's Phases 0–6 (Steps 2–8). Each item is one week-sized PR.
+sast-triage is a diff-aware SAST gate for Python, JavaScript and TypeScript (CLI, GitHub Action, GitHub App; v2.6.2). This roadmap takes it to a multi-tool, multi-tenant platform: five quick wins (Step 1), then Robin's Phases 0–6 (Steps 2–8). Each item is one week-sized PR.
 
 Merging approves order and acceptance, never a `Needs owner` decision or any dependency, deployment, workflow, hosting, release or trust-boundary change. "Done when" gates need real evidence, and the next step waits for them. Steps 2–8 have one row per item; full Why, Out of scope and Touches arrive by roadmap PR before a step becomes current.
 
