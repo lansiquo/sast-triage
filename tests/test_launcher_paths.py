@@ -88,9 +88,10 @@ def test_a_launcher_the_kernel_cannot_start_is_refused_under_a_path_without_a_sp
     refused(project, monkeypatch, capsys, tmp_path / 'runner' / 'bin', first_line)
 
 
-def test_a_first_line_longer_than_the_kernel_reads_is_still_refused_under_a_path_with_a_space(
-        tmp_path, monkeypatch, capsys, project):
-    folder = tmp_path / 'runner temp' / ('x' * 200) / 'bin'
+@pytest.mark.parametrize('name', ['runner temp', 'runner\u00a0temp'], ids=['space', 'no-break space'])
+def test_a_first_line_longer_than_the_kernel_reads_is_still_refused_under_a_path_with_whitespace(
+        tmp_path, monkeypatch, capsys, project, name):
+    folder = tmp_path / name / ('x' * 200) / 'bin'
     assert len(os.fsencode(folder / 'python')) + 3 > 256   # "#!", the path and the newline
     refused(project, monkeypatch, capsys, folder)
 

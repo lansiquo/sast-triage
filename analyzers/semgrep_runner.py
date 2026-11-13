@@ -461,21 +461,37 @@ def docker_scan_command(stage, config, base_cmd, name):
             f"--entrypoint={scanner_command}", image, *scanner_args, "."]
 
 
+def _shebang(first_line: bytes) -> str:
+    """The text after "#!" as the kernel reads it: up to the newline, without spaces and tabs around it.
+
+    Every other character stays, such as the carriage return of a line that ends in CRLF. A carriage
+    return anywhere gives "", which names no interpreter.
+    """
+    text = first_line[2:].removesuffix(b"\n").strip(b" \t")
+    return "" if b"\r" in text else text.decode("utf-8")
+
+
+def _read_whole(first_line: bytes) -> bool:
+    """Whether the kernel reads all of a script's first line: it ends in a newline within 256 bytes."""
+    return first_line.endswith(b"\n") and len(first_line) <= 256
+
+
 def _spaced_interpreter(executable: str) -> Optional[str]:
     """The interpreter a launcher must be started with, or None when the launcher starts by itself.
 
     pip writes the whole path of the environment's Python after "#!" on a script's first line, but
     the kernel ends the interpreter's name at the first space or tab. A launcher installed under a
-    path with a space or tab therefore starts only through the interpreter its whole line names.
+    path with a space or tab therefore starts only through the interpreter its whole line names,
+    if the kernel would read all of that line.
     """
     try:
         with open(executable, "rb") as source:
             first_line = source.readline(4096)
-        interpreter = first_line[2:].decode("utf-8").strip()
+        interpreter = _shebang(first_line)
     except (OSError, UnicodeError):
         return None
-    if first_line.startswith(b"#!") and re.search("[ \t]", interpreter) and os.path.isabs(interpreter) \
-            and os.path.isfile(interpreter) and os.access(interpreter, os.X_OK):
+    if first_line.startswith(b"#!") and _read_whole(first_line) and re.search("[ \t]", interpreter) \
+            and os.path.isabs(interpreter) and os.path.isfile(interpreter) and os.access(interpreter, os.X_OK):
         return interpreter
     return None
 
@@ -489,7 +505,9 @@ def _launcher_is_usable(executable: str) -> bool:
             first_line = source.readline(4096)
         if first_line.startswith(b"#!"):
             # Like the kernel, end the interpreter's name at the first space or tab only.
-            interpreter = re.split("[ \t]", first_line[2:].decode("utf-8").strip())[0]
+            interpreter = re.split("[ \t]", _shebang(first_line))[0]
+            if any(character.isspace() for character in interpreter) and not _read_whole(first_line):
+                return False  # Other whitespace is part of the name only where the kernel reads all of it.
             return os.path.isabs(interpreter) and os.access(interpreter, os.X_OK)
         return True  # Native executable; launch errors remain fatal.
     except (OSError, UnicodeError, IndexError):
