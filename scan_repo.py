@@ -447,8 +447,9 @@ def main(argv=None):
     conclusion = gate(findings) if files else 'neutral'
 
     # The two files are one result: the SARIF file is staged first and renamed into place only once the
-    # Markdown file is written, so a destination that can't be written leaves neither file created or changed.
-    staged, created = None, False
+    # Markdown file is written. If that rename fails, the Markdown file is removed if this scan created it, or
+    # gets back the bytes it held, so a destination that can't be written leaves the other one as it was.
+    staged, created, old_summary = None, False, None
     try:
         if args.sarif:
             try:
@@ -459,6 +460,11 @@ def main(argv=None):
                 return ERROR
         if args.markdown:
             created = not os.path.lexists(args.markdown)
+            if staged and not created:
+                try:
+                    old_summary = args.markdown.read_bytes() if args.markdown.is_file() else None
+                except OSError:
+                    pass   # it can't be put back if the rename fails, and the error then says so
             try:
                 args.markdown.write_text(markdown(findings, args.base) + skipped_note(skipped) + '\n')
             except OSError as error:
@@ -469,13 +475,19 @@ def main(argv=None):
             try:
                 os.replace(staged, args.sarif)
             except OSError as error:
-                if created:   # the summary this scan just created is no result either
-                    try:
-                        args.markdown.unlink()
-                    except OSError:
-                        pass
                 print(f'error: could not write the SARIF file {args.sarif}, no result issued.\n{error}',
                       file=sys.stderr)
+                if args.markdown:   # the summary is no result either
+                    try:
+                        if created:
+                            args.markdown.unlink()
+                        elif old_summary is None:
+                            raise OSError('its old content was not read: it is unreadable or not a regular file')
+                        else:
+                            args.markdown.write_bytes(old_summary)
+                    except OSError as reason:
+                        print(f'error: the Markdown file {args.markdown} could not be put back as it was.\n{reason}',
+                              file=sys.stderr)
                 return ERROR
             staged = None
     finally:
