@@ -796,8 +796,8 @@ def test_action_timeout_empty_keeps_todays_arguments_and_600_adds_timeout_600(tm
     for timeout, added in (({}, []), ({'timeout': ''}, []), ({'timeout': '600'}, ['--timeout', '600'])):
         result = scan_step(tmp_path, stub=True, base_ref=base_ref, **inputs, **timeout)
         assert result.returncode == 0, result.stderr
-        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), str(tmp_path), '--markdown',
-                                    str(result.report), *base_arguments, *added], timeout
+        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), '--markdown',
+                                    str(result.report), *base_arguments, *added, '--', str(tmp_path)], timeout
 
 
 def test_action_timeout_reaches_the_script_only_through_an_environment_variable(tmp_path, scan_step):
@@ -810,7 +810,7 @@ def test_action_timeout_reaches_the_script_only_through_an_environment_variable(
     hostile = '600 --json; touch "$RUNNER_TEMP/ran" $(touch "$RUNNER_TEMP/ran") `touch "$RUNNER_TEMP/ran"`'
     result = scan_step(tmp_path, stub=True, timeout=hostile)
     assert result.returncode == 0, result.stderr
-    assert result.arguments[-2:] == ['--timeout', hostile] and not (result.runner_temp / 'ran').exists()
+    assert result.arguments[-4:-2] == ['--timeout', hostile] and not (result.runner_temp / 'ran').exists()
 
 
 def test_readme_github_action_documents_the_timeout_input_and_its_default():
@@ -844,10 +844,10 @@ def test_action_timeout_leaves_the_base_arguments_and_gate_result_unchanged(tmp_
     base_arguments = [] if base == 'none' else ['--base', base]
     empty = scan_step(root, base=base)
     assert empty.returncode == code, empty.stderr
-    assert empty.arguments[6:] == base_arguments and gate in empty.summary
+    assert empty.arguments[5:-2] == base_arguments and gate in empty.summary
     valid = scan_step(root, base=base, timeout='600')
     assert valid.returncode == code, valid.stderr
-    assert valid.arguments[6:] == [*base_arguments, '--timeout', '600']
+    assert valid.arguments[5:-2] == [*base_arguments, '--timeout', '600']
     assert (valid.stdout, valid.summary) == (empty.stdout, empty.summary)
 
 
@@ -905,8 +905,8 @@ def test_action_sarif_empty_leaves_the_arguments_unchanged_and_a_path_adds_sarif
                          ({'sarif': absolute, 'timeout': '600'}, ['--timeout', '600', '--sarif', absolute])):
         result = scan_step(tmp_path, stub=True, base_ref=base_ref, **inputs, **sarif)
         assert result.returncode == 0, result.stderr
-        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), str(tmp_path), '--markdown',
-                                    str(result.report), *base_arguments, *added], sarif
+        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), '--markdown',
+                                    str(result.report), *base_arguments, *added, '--', str(tmp_path)], sarif
 
 
 def test_action_sarif_reaches_the_script_only_through_an_environment_variable(tmp_path, scan_step):
@@ -918,7 +918,7 @@ def test_action_sarif_reaches_the_script_only_through_an_environment_variable(tm
     hostile = 'out.sarif --json; touch "$RUNNER_TEMP/ran" $(touch "$RUNNER_TEMP/ran") `touch "$RUNNER_TEMP/ran"`'
     result = scan_step(tmp_path, stub=True, sarif=hostile)
     assert result.returncode == 0, result.stderr
-    assert result.arguments[-2:] == ['--sarif', hostile] and not (result.runner_temp / 'ran').exists()
+    assert result.arguments[-4:-2] == ['--sarif', hostile] and not (result.runner_temp / 'ran').exists()
 
 
 @FULL_AND_BASE
@@ -938,7 +938,7 @@ def test_action_sarif_writes_the_file_for_a_full_and_a_base_scan_at_a_path_with_
             ('scan results/sast triage.sarif', root / 'scan results' / 'sast triage.sarif')):
         result = scan_step(root, base=base, sarif=sarif, cwd=root)
         assert result.returncode == code, result.stderr
-        assert result.arguments[6:] == [*base_arguments, '--sarif', sarif]
+        assert result.arguments[5:-2] == [*base_arguments, '--sarif', sarif]
         # The same file the command line writes for this scan, and no other file beside it.
         assert written.read_bytes() == by_command_line.read_bytes()
         assert [path.name for path in written.parent.iterdir()] == ['sast triage.sarif']
@@ -968,7 +968,7 @@ def test_action_sarif_is_not_created_and_an_existing_file_is_unchanged_when_the_
     for name in ('fresh file.sarif', 'existing file.sarif'):
         result = scan_step(root, sarif=str(folder / name), **inputs)
         assert result.returncode == 2, result.stderr
-        assert result.arguments[-2:] == ['--sarif', str(folder / name)]
+        assert result.arguments[-4:-2] == ['--sarif', str(folder / name)]
         assert result.stdout == '' and result.summary is None and not result.report.exists()      # no result
         assert tree(folder) == before, name                  # nothing created, the existing file unchanged
 
@@ -1795,8 +1795,8 @@ def test_action_annotations_true_adds_the_flag_and_false_leaves_the_arguments_un
                                 ['--timeout', '600', '--sarif', 'out.sarif', '--github-annotations'])):
         result = scan_step(tmp_path, stub=True, base_ref=base_ref, **inputs, **annotations)
         assert result.returncode == 0, result.stderr
-        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), str(tmp_path), '--markdown',
-                                    str(result.report), *base_arguments, *added], annotations
+        assert result.arguments == ['-E', '-s', str(ROOT / 'scan_repo.py'), '--markdown',
+                                    str(result.report), *base_arguments, *added, '--', str(tmp_path)], annotations
 
 
 @pytest.mark.parametrize('base', ['main', 'none'], ids=['base-ref', 'base-none'])
@@ -1833,7 +1833,7 @@ def test_action_annotations_true_prints_the_commands_of_the_command_line_without
     assert runner_commands(without.stdout, without.stderr) == []          # the default prints no command
     result = scan_step(root, base=base, annotations='true')
     assert result.returncode == code, result.stderr                       # the gate is unchanged
-    assert result.arguments[6:] == [*base_arguments, '--github-annotations']
+    assert result.arguments[5:-2] == [*base_arguments, '--github-annotations']
     assert (result.summary, result.stderr) == (without.summary, without.stderr)
     assert result.stdout.startswith(without.stdout)                       # the report, then the commands
     by_command_line = command_line(root, *base_arguments, '--github-annotations')
@@ -1888,3 +1888,76 @@ def test_readme_documents_the_github_annotations_flag_and_the_annotations_input_
     default = json.dumps(action_definition()['inputs']['annotations']['default'])    # "false", as the README writes it
     assert rows[0].startswith(f'| `annotations` | `{default}` |') and '`--github-annotations`' in rows[0]
     assert f'    annotations: {default} ' in section, 'the workflow example shows the default too'
+
+
+# The Action's `path` input is the directory to scan, whatever its name. A value that starts with "-" must reach
+# scan_repo.py as that directory, never as one of its options: `path: -h` printed the help and passed the step
+# with exit status 0, with no scan and no summary. The step runs here as for `timeout` above. [W-sast-triage-29]
+DASH_PATHS = pytest.mark.parametrize('name', ['-h', '--help', '--he', '-weird', '--json'])
+
+
+@DASH_PATHS
+def test_action_path_that_starts_with_a_dash_is_the_directory_scanned(tmp_path, scan_step, name):
+    workspace = project(tmp_path / 'workspace' / name, {'app.js': 'const total = eval(req.body.preTax);'}).parent
+    result = scan_step(name, cwd=workspace)
+    assert result.stdout.startswith(f'sast-triage full scan of {name}\n'), result.stdout
+    assert result.returncode == 1, result.stderr
+    assert b'**Gate: FAIL**' in result.summary
+    assert result.arguments[-2:] == ['--', name]
+    by_command_line = subprocess.run([sys.executable, str(ROOT / 'scan_repo.py'), '--', name], cwd=workspace,
+                                     capture_output=True, text=True, timeout=300)
+    assert (by_command_line.returncode, by_command_line.stdout) == (1, result.stdout)
+
+
+def test_action_path_that_starts_with_a_dash_passes_the_gate_only_after_its_scan(tmp_path, scan_step):
+    workspace = project(tmp_path / 'workspace' / '-h', {'app.js': 'const total = 1;'}).parent
+    result = scan_step('-h', cwd=workspace)
+    assert result.stdout.startswith('sast-triage full scan of -h\n'), result.stdout
+    assert result.returncode == 0, result.stderr
+    assert b'**Gate: PASS**' in result.summary and '\n1 Python, JavaScript and TypeScript files, ' in result.stdout
+
+
+@DASH_PATHS
+def test_action_path_that_starts_with_a_dash_and_is_no_directory_exits_two_with_no_result(tmp_path, scan_step, name):
+    result = scan_step(name, cwd=tmp_path)
+    assert result.returncode == 2, result.stdout
+    assert result.stderr.splitlines()[-1] == f'scan_repo.py: error: not a directory: {name}'
+    assert result.stdout == '' and result.summary is None and not result.report.exists()
+
+
+@pytest.mark.parametrize('base,code,gate', [
+    ('main', 0, b'**Gate: PASS**'),          # a base ref: the P1 is on an untouched line, so pre-existing
+    ('none', 1, b'**Gate: FAIL**'),          # base: none: a full scan, where every finding is new
+], ids=['base-ref', 'base-none'])
+def test_action_path_that_starts_with_a_dash_keeps_every_other_input(tmp_path, scan_step, base, code, gate):
+    root = pre_existing_only(tmp_path / '-h')
+    inputs = {'base': base, 'timeout': '600', 'sarif': 'out.sarif', 'annotations': 'true'}
+    by_name = scan_step('-h', cwd=tmp_path, **inputs)
+    assert by_name.stdout.startswith(('sast-triage scan of -h, ', 'sast-triage full scan of -h\n')), by_name.stdout
+    assert by_name.returncode == code, by_name.stderr
+    sarif = (tmp_path / 'out.sarif').read_bytes()
+    by_path = scan_step(root, cwd=tmp_path, **inputs)        # the same folder by a path that does not start with "-"
+    assert by_path.returncode == code, by_path.stderr
+    base_arguments = [] if base == 'none' else ['--base', base]
+    assert by_name.arguments[3:] == ['--markdown', str(by_name.report), *base_arguments, '--timeout', '600',
+                                     '--sarif', 'out.sarif', '--github-annotations', '--', '-h']
+    assert gate in by_name.summary and by_name.summary == by_path.summary
+    assert sarif == (tmp_path / 'out.sarif').read_bytes()
+    assert by_name.stdout.replace('-h', str(root)) == by_path.stdout
+
+
+def test_command_line_scans_a_directory_that_starts_with_a_dash_after_double_dash_and_h_still_shows_help(
+        tmp_path, monkeypatch, capsys):
+    project(tmp_path / '-h', {'app.js': 'const total = eval(req.body.preTax);'})
+    monkeypatch.chdir(tmp_path)
+    assert scan_repo.main(['--json', '--', '-h']) == 1
+    assert json.loads(capsys.readouterr().out)['directory'] == '-h'
+    for arguments, code, stream, text in ((['--', '-weird'], 2, 'err', 'error: not a directory: -weird\n'),
+                                          (['-h'], 0, 'out', 'usage: '),
+                                          (['--help'], 0, 'out', 'usage: '),
+                                          # without `--` an unknown word that starts with "-" stays a usage error
+                                          (['-weird'], 2, 'err', 'the following arguments are required: directory')):
+        with pytest.raises(SystemExit) as error:
+            scan_repo.main(arguments)
+        assert error.value.code == code, arguments
+        assert text in getattr(capsys.readouterr(), stream), arguments
