@@ -13,8 +13,10 @@ Exit status: 0 when the gate passes, 1 when it fails (a new P1 finding),
 import os
 os.environ['PRSEC_LOAD_DOTENV'] = '0'
 import argparse
+import errno
 import json
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -289,13 +291,20 @@ def sarif_document(findings):
     }
 
 
-def write_sarif(path: Path, document):
-    """Write the SARIF document atomically, so a failed write leaves no partial artifact.
+def stage_sarif(path: Path, document) -> Path:
+    """Write the SARIF document to a temporary file in the destination's directory, and return it.
 
-    The document is written to a temporary file in the destination's directory and
-    renamed into place only once it is complete. Any OSError (a missing or unwritable
-    directory) propagates with the destination untouched, and the temporary is removed.
+    The caller renames the complete file into place with os.replace, so a failed write leaves no
+    partial artifact. Any OSError (a missing or unwritable directory, a destination that is a
+    directory, or a name too long) propagates with the destination untouched, and the temporary is
+    removed. Those destinations are refused here, before the --markdown file is written, so that a
+    SARIF file that can't be written leaves no summary either.
     """
+    try:
+        if stat.S_ISDIR(os.lstat(path).st_mode):
+            raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), str(path))
+    except (FileNotFoundError, NotADirectoryError):
+        pass   # creating the temporary file below reports a missing directory, or one that is a file
     text = json.dumps(document, indent=2) + '\n'
     handle = tempfile.NamedTemporaryFile('w', dir=path.parent, prefix='.sarif_', suffix='.tmp',
                                          delete=False, encoding='utf-8')
@@ -303,10 +312,10 @@ def write_sarif(path: Path, document):
     try:
         with handle:
             handle.write(text)
-        os.replace(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+    return temporary
 
 
 MAX_ANNOTATIONS = 200   # as on the GitHub App's Check Run
@@ -437,15 +446,53 @@ def main(argv=None):
     findings = triage(findings, changed, baseline)
     conclusion = gate(findings) if files else 'neutral'
 
-    if args.markdown:
-        args.markdown.write_text(markdown(findings, args.base) + skipped_note(skipped) + '\n')
-    if args.sarif:
-        try:
-            write_sarif(args.sarif, sarif_document(findings))
-        except OSError as error:
-            print(f'error: could not write the SARIF file {args.sarif}, no result issued.\n{error}',
-                  file=sys.stderr)
-            return ERROR
+    # The two files are one result: the SARIF file is staged first and renamed into place only once the
+    # Markdown file is written. If that rename fails, the Markdown file is removed if this scan created it, or
+    # gets back the bytes it held, so a destination that can't be written leaves the other one as it was.
+    staged, created, old_summary = None, False, None
+    try:
+        if args.sarif:
+            try:
+                staged = stage_sarif(args.sarif, sarif_document(findings))
+            except OSError as error:
+                print(f'error: could not write the SARIF file {args.sarif}, no result issued.\n{error}',
+                      file=sys.stderr)
+                return ERROR
+        if args.markdown:
+            created = not os.path.lexists(args.markdown)
+            if staged and not created:
+                try:
+                    old_summary = args.markdown.read_bytes() if args.markdown.is_file() else None
+                except OSError:
+                    pass   # it can't be put back if the rename fails, and the error then says so
+            try:
+                args.markdown.write_text(markdown(findings, args.base) + skipped_note(skipped) + '\n')
+            except OSError as error:
+                print(f'error: could not write the Markdown file {args.markdown}, no result issued.\n{error}',
+                      file=sys.stderr)
+                return ERROR
+        if staged:
+            try:
+                os.replace(staged, args.sarif)
+            except OSError as error:
+                print(f'error: could not write the SARIF file {args.sarif}, no result issued.\n{error}',
+                      file=sys.stderr)
+                if args.markdown:   # the summary is no result either
+                    try:
+                        if created:
+                            args.markdown.unlink()
+                        elif old_summary is None:
+                            raise OSError('its old content was not read: it is unreadable or not a regular file')
+                        else:
+                            args.markdown.write_bytes(old_summary)
+                    except OSError as reason:
+                        print(f'error: the Markdown file {args.markdown} could not be put back as it was.\n{reason}',
+                              file=sys.stderr)
+                return ERROR
+            staged = None
+    finally:
+        if staged:
+            staged.unlink(missing_ok=True)
     scan = f'changes since {args.base}' if args.base else 'full: every finding counts as new'
     if args.json:
         print(log_safe(json.dumps({'directory': str(args.directory), 'scan': scan, 'base': args.base,
