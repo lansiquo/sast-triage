@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [2.6.1] - 2026-11-13
 ### Added
 - **Record the product framing decision (`docs/decisions/0003-product-framing.md`).** Documentation only. sast-triage is a triage and gate layer over any scanner: it labels findings new or pre-existing, ranks them and gates pull requests, and it is not a scanner of its own. In scope: imported SAST results as SARIF 2.1.0 (roadmap Step 3, not built yet), the existing Semgrep path with its 41 service-owned rules, and the same new or pre-existing labels, P1–P3 ranking and gate from the command line, the GitHub Action and the GitHub App. Out of scope for now: new languages and secrets scanning; SCA stays in sca-triage. The record gives the four options not chosen (a full scanner, more languages, secrets scanning, absorbing SCA) with the reason for each, says for each Step 3 item (F-3.1 to F-3.5) whether the framing supports it as written, and lists what still needs a separate owner decision and the statements in `README.md`, `ARCHITECTURE.md` and `ROADMAP.md` that differ from the decision and are left as follow-up items. No SARIF import is built, and no code, dependency, scan result or exit status (0, 1 and 2) changes. (F-2.5)
 
@@ -165,7 +167,8 @@ Upgrading from 1.0.0: the app reads `.env` only when `PRSEC_LOAD_DOTENV=1` (`mak
 ### Added
 - Initial tag and first protected merge baseline.
 
-[Unreleased]: https://github.com/lansiquo/sast-triage/compare/v2.6.0...HEAD
+[Unreleased]: https://github.com/lansiquo/sast-triage/compare/v2.6.1...HEAD
+[2.6.1]: https://github.com/lansiquo/sast-triage/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/lansiquo/sast-triage/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/lansiquo/sast-triage/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/lansiquo/sast-triage/compare/v2.4.0...v2.4.1
