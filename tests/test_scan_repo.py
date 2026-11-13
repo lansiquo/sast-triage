@@ -1037,6 +1037,12 @@ def test_an_output_that_cannot_be_written_exits_two_and_neither_output_is_create
         assert tree(folder) == before, written               # no file created or changed, and no temporary
 
 
+def refuse_rename(source, destination):
+    """os.replace as for a SARIF destination that is a mount point, or another user's file in a sticky folder such as
+    /tmp: the temporary can be written beside it, but renaming it into place fails."""
+    raise PermissionError(errno.EPERM, os.strerror(errno.EPERM), f'{source} -> {destination}')
+
+
 def test_a_sarif_file_that_fails_only_when_renamed_into_place_leaves_no_new_markdown_file(tmp_path, monkeypatch,
                                                                                          capsys):
     root = project(tmp_path / 'project')
@@ -1044,14 +1050,55 @@ def test_a_sarif_file_that_fails_only_when_renamed_into_place_leaves_no_new_mark
     folder.mkdir()
     sarif = folder / 'out.sarif'
 
-    def refuse(source, destination):   # as for a destination that is a mount point, or another user's file
-        raise PermissionError(errno.EPERM, os.strerror(errno.EPERM), str(destination))
-
-    monkeypatch.setattr(scan_repo.os, 'replace', refuse)
+    monkeypatch.setattr(scan_repo.os, 'replace', refuse_rename)
     assert scan_repo.main([str(root), '--markdown', str(folder / 'out.md'), '--sarif', str(sarif)]) == 2
     captured = capsys.readouterr()
     assert captured.out == '' and captured.err.startswith(OUTPUT_ERROR['sarif'].format(sarif)), captured.err
     assert tree(folder) == []                                # no Markdown file, no SARIF file and no temporary
+
+
+@pytest.mark.parametrize('name', ['out.md', 'link to out.md'])
+def test_a_sarif_file_that_fails_only_when_renamed_into_place_leaves_an_existing_markdown_file_as_it_was(
+        tmp_path, monkeypatch, capsys, name):
+    root = project(tmp_path / 'project')
+    folder = tmp_path / 'scan results'
+    folder.mkdir()
+    (folder / 'out.md').write_bytes(b'OLD summary\n')
+    (folder / 'out.md').chmod(0o640)
+    (folder / 'link to out.md').symlink_to('out.md')
+    sarif = folder / 'out.sarif'
+    sarif.write_bytes(b'OLD sarif\n')
+    before, mode = tree(folder), (folder / 'out.md').stat().st_mode
+
+    monkeypatch.setattr(scan_repo.os, 'replace', refuse_rename)
+    for output in ([], ['--json']):
+        assert scan_repo.main([str(root), '--markdown', str(folder / name), '--sarif', str(sarif), *output]) == 2
+        captured = capsys.readouterr()
+        assert captured.out == '', output                    # no report and no JSON
+        assert captured.err.startswith(OUTPUT_ERROR['sarif'].format(sarif)), captured.err
+        assert len(captured.err.splitlines()) == 2, captured.err      # the error and its reason, nothing else
+        assert tree(folder) == before, output                # both files keep their bytes, and no temporary
+        assert (folder / 'link to out.md').is_symlink() and (folder / 'out.md').stat().st_mode == mode
+
+
+@pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='file permissions do not stop root')
+def test_an_existing_markdown_file_that_cannot_be_read_back_is_named_when_the_sarif_rename_fails(tmp_path,
+                                                                                                 monkeypatch, capsys):
+    # The one case the scan can't undo, as the README says: it can write the file but not read its old content.
+    root = project(tmp_path / 'project')
+    summary, sarif = tmp_path / 'out.md', tmp_path / 'out.sarif'
+    summary.write_bytes(b'OLD summary\n')
+    summary.chmod(0o200)
+    monkeypatch.setattr(scan_repo.os, 'replace', refuse_rename)
+    try:
+        assert scan_repo.main([str(root), '--markdown', str(summary), '--sarif', str(sarif)]) == 2
+        captured = capsys.readouterr()
+        assert captured.out == '' and captured.err.startswith(OUTPUT_ERROR['sarif'].format(sarif)), captured.err
+        assert f'\nerror: the Markdown file {summary} could not be put back as it was.\n' in captured.err
+        summary.chmod(0o600)
+        assert summary.read_text().startswith('### sast-triage — Semgrep summary') and not sarif.exists()
+    finally:
+        summary.chmod(0o600)
 
 
 def test_markdown_in_a_missing_folder_exits_two_with_an_error_instead_of_a_traceback(tmp_path):
