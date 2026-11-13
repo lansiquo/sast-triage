@@ -182,6 +182,11 @@ def run_semgrep(
     if scanner_command == "opengrep":
         # Opengrep removed metrics support; its native CLI rejects this option.
         base_cmd.remove("--metrics=off")
+    interpreter = None if container_backend else _spaced_interpreter(semgrep_bin)
+    if interpreter:
+        # Semgrep's launcher would start pysemgrep, which names the same interpreter, by its first
+        # line too; --legacy runs Semgrep's Python command line inside the launcher instead.
+        base_cmd[:1] = [interpreter, semgrep_bin, *(["--legacy"] if scanner_command == "semgrep" else [])]
     base_cmd += ["--config", ruleset]
     for pat in excludes:
         base_cmd += ["--exclude", pat]
@@ -456,13 +461,35 @@ def docker_scan_command(stage, config, base_cmd, name):
             f"--entrypoint={scanner_command}", image, *scanner_args, "."]
 
 
+def _spaced_interpreter(executable: str) -> Optional[str]:
+    """The interpreter a launcher must be started with, or None when the launcher starts by itself.
+
+    pip writes the whole path of the environment's Python after "#!" on a script's first line, but
+    the kernel ends the interpreter's name at the first space or tab. A launcher installed under a
+    path with a space or tab therefore starts only through the interpreter its whole line names.
+    """
+    try:
+        with open(executable, "rb") as source:
+            first_line = source.readline(4096)
+        interpreter = first_line[2:].decode("utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    if first_line.startswith(b"#!") and re.search("[ \t]", interpreter) and os.path.isabs(interpreter) \
+            and os.path.isfile(interpreter) and os.access(interpreter, os.X_OK):
+        return interpreter
+    return None
+
+
 def _launcher_is_usable(executable: str) -> bool:
     """Reject moved-venv scripts whose absolute shebang interpreter is gone."""
+    if _spaced_interpreter(executable):
+        return True
     try:
         with open(executable, "rb") as source:
             first_line = source.readline(4096)
         if first_line.startswith(b"#!"):
-            interpreter = first_line[2:].decode("utf-8").strip().split()[0]
+            # Like the kernel, end the interpreter's name at the first space or tab only.
+            interpreter = re.split("[ \t]", first_line[2:].decode("utf-8").strip())[0]
             return os.path.isabs(interpreter) and os.access(interpreter, os.X_OK)
         return True  # Native executable; launch errors remain fatal.
     except (OSError, UnicodeError, IndexError):
