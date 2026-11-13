@@ -57,19 +57,42 @@ def test_the_scan_runs_semgrep_installed_under_any_path(tmp_path, monkeypatch, c
     assert 'Gate: PASS' in capsys.readouterr().out
 
 
+# The kernel drops only the spaces and tabs around the interpreter's name, so every other character
+# there stays part of it, and a carriage return is refused wherever it is.
+UNSTARTABLE = {'CRLF': b'#!{bin}/python\r', 'carriage return inside': b'#!{bin}/py\rthon',
+               'trailing vertical tab': b'#!{bin}/python\x0b', 'trailing no-break space': b'#!{bin}/python\xc2\xa0',
+               'leading form feed': b'#!\x0c{bin}/python'}
 UNUSABLE = {'missing interpreter': b'#!{bin}/missing python', 'quoted interpreter': b'#!"{bin}/python"',
-            'folder as interpreter': b'#!{bin}', 'interpreter not executable': b'#!{bin}/plain file'}
+            'folder as interpreter': b'#!{bin}', 'interpreter not executable': b'#!{bin}/plain file',
+            **UNSTARTABLE, 'NUL': b'#!{bin}/python\x00'}
+
+
+def refused(project, monkeypatch, capsys, folder, first_line=None):
+    install(folder, first_line and first_line.replace(b'{bin}', os.fsencode(folder)))
+    (folder / 'plain file').write_text('')   # not executable
+    os.symlink(sys.executable, folder / 'py\rthon')   # so only the carriage return is wrong
+    monkeypatch.setattr(runner.sys, 'executable', str(folder / 'python'))
+    assert scan_repo.main([str(project)]) == 2
+    assert 'No usable Semgrep launcher found' in capsys.readouterr().err
 
 
 @pytest.mark.parametrize('first_line', UNUSABLE.values(), ids=UNUSABLE)
 def test_a_launcher_that_cannot_start_is_still_refused_under_a_path_with_a_space(tmp_path, monkeypatch, capsys,
                                                                                   project, first_line):
-    folder = tmp_path / 'runner temp' / 'bin'
-    install(folder, first_line.replace(b'{bin}', os.fsencode(folder)))
-    (folder / 'plain file').write_text('')   # not executable
-    monkeypatch.setattr(runner.sys, 'executable', str(folder / 'python'))
-    assert scan_repo.main([str(project)]) == 2
-    assert 'No usable Semgrep launcher found' in capsys.readouterr().err
+    refused(project, monkeypatch, capsys, tmp_path / 'runner temp' / 'bin', first_line)
+
+
+@pytest.mark.parametrize('first_line', UNSTARTABLE.values(), ids=UNSTARTABLE)
+def test_a_launcher_the_kernel_cannot_start_is_refused_under_a_path_without_a_space(tmp_path, monkeypatch, capsys,
+                                                                                     project, first_line):
+    refused(project, monkeypatch, capsys, tmp_path / 'runner' / 'bin', first_line)
+
+
+def test_a_first_line_longer_than_the_kernel_reads_is_still_refused_under_a_path_with_a_space(
+        tmp_path, monkeypatch, capsys, project):
+    folder = tmp_path / 'runner temp' / ('x' * 200) / 'bin'
+    assert len(os.fsencode(folder / 'python')) + 3 > 256   # "#!", the path and the newline
+    refused(project, monkeypatch, capsys, folder)
 
 
 @pytest.mark.parametrize('command', ['semgrep', 'opengrep'])
