@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- **A `--markdown` file that can't be written ended the scan in a Python traceback with exit status 1, the status of a failed gate, and a `--sarif` file that can't be written still left the `--markdown` summary behind; either now stops the scan with exit status 2, and neither file is created or changed.** For example, `scan_repo.py tests/fixtures/project --markdown missing/out.md --sarif out.sarif` ended in `FileNotFoundError` with exit status 1; it now prints `error: could not write the Markdown file missing/out.md, no result issued.` with the reason, prints no report or JSON, and writes no `out.sarif`. And `--markdown out.md --sarif missing/out.sarif` exited with status 2 and the SARIF error but had already written `out.md`, so the GitHub Action with a `sarif` input in a missing folder added a summary with a Gate line to a failing step; the scan now stops with the same SARIF error before `out.md` is written, and the Action adds no summary. The same holds when the destination is an existing folder, a path below a file or a name too long, and an existing `--markdown` or `--sarif` file keeps its bytes. The SARIF file is now written to a temporary file in its folder before the Markdown file is written, and renamed into place after it, as one result. When both files can be written, the files, the output and the exit status (0 or 1) are unchanged. [W-sast-triage-17] [W-sast-triage-36]
 
 ## [2.6.1] - 2026-11-13
 ### Added

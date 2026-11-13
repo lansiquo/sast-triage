@@ -110,7 +110,7 @@ scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--sarif FILE] [-
 | none | A full scan: every supported file is scanned and every finding counts as new, also those an existing codebase already had |
 | `--base REF` | Scans only the files changed since the merge base of `REF` and `HEAD`, and labels each finding as for a pull request: see [How triage works](#how-triage-works) |
 | `--json` | Prints the result as JSON instead of the report |
-| `--markdown FILE` | Also writes the Markdown summary to `FILE` |
+| `--markdown FILE` | Also writes the Markdown summary to `FILE`. It is written only when the scan issues a result (exit status 0 or 1): a scan that stops with exit status 2 writes nothing and leaves an existing file untouched |
 | `--timeout SECONDS` | Limits the scan (default: 300 seconds) |
 | `--sarif FILE` | Also writes the findings as a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) file |
 | `--github-annotations` | Also prints, after the report, one GitHub Actions [workflow command](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands) per finding, which GitHub shows as an annotation on the workflow run and on the pull request's files |
@@ -360,11 +360,10 @@ rootless Docker sandbox) is prepared but not live; see [deploy/README.md](deploy
 |---|---|
 | 0 | The gate passes: no new P1 finding, or nothing to scan |
 | 1 | The gate fails: at least one new P1 finding |
-| 2 | Usage, git or scanner error, such as a missing directory, a `--timeout` that is not a whole number, `--github-annotations` with `--json`, a `--base` ref that is not a commit in the checkout or has no merge base with `HEAD` (the error says what to fetch), a folder that can't be read, an incomplete scan or a `--sarif` destination that can't be written |
+| 2 | Usage, git or scanner error, such as a missing directory, a `--timeout` that is not a whole number, `--github-annotations` with `--json`, a `--base` ref that is not a commit in the checkout or has no merge base with `HEAD` (the error says what to fetch), a folder that can't be read, an incomplete scan, or a `--markdown` or `--sarif` destination that can't be written |
 
-With exit status 2 no result is issued: no report or workflow command is printed, and the Action adds no
-summary. One case differs: when only the SARIF file can't be written, the `--markdown` summary, which the
-Action shows as its job summary, is already written.
+With exit status 2 no result is issued: no report or workflow command is printed, no `--markdown` or
+`--sarif` file is written, and the Action adds no summary.
 
 ## Scope and limits
 
