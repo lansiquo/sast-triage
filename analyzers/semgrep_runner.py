@@ -461,53 +461,37 @@ def docker_scan_command(stage, config, base_cmd, name):
             f"--entrypoint={scanner_command}", image, *scanner_args, "."]
 
 
-def _shebang(first_line: bytes) -> str:
-    """The text after "#!" as the kernel reads it: up to the newline, without spaces and tabs around it.
-
-    Every other character stays, such as the carriage return of a line that ends in CRLF. A carriage
-    return anywhere gives "", which names no interpreter.
-    """
-    text = first_line[2:].removesuffix(b"\n").strip(b" \t")
-    return "" if b"\r" in text else text.decode("utf-8")
-
-
-def _read_whole(first_line: bytes) -> bool:
-    """Whether the kernel reads all of a script's first line: it ends in a newline within 256 bytes."""
-    return first_line.endswith(b"\n") and len(first_line) <= 256
-
-
 def _spaced_interpreter(executable: str) -> Optional[str]:
-    """The interpreter a launcher must be started with, or None when the launcher starts by itself.
+    """The interpreter to start a launcher with when only a space or tab in its path stops it.
 
     pip writes the whole path of the environment's Python after "#!" on a script's first line, but
-    the kernel ends the interpreter's name at the first space or tab. A launcher installed under a
-    path with a space or tab therefore starts only through the interpreter its whole line names,
-    if the kernel would read all of that line.
+    the kernel ends the interpreter's name at the first space or tab, and so does the check below.
+    Only for a launcher that check refuses: its first line ends in a newline within the 256 bytes
+    the kernel reads, holds no carriage return, and all of it after "#!" is an absolute path, with a
+    space or tab, to an executable regular file.
     """
+    if _launcher_is_usable(executable):
+        return None
     try:
         with open(executable, "rb") as source:
             first_line = source.readline(4096)
-        interpreter = _shebang(first_line)
+        interpreter = first_line[2:-1].decode("utf-8")
     except (OSError, UnicodeError):
         return None
-    if first_line.startswith(b"#!") and _read_whole(first_line) and re.search("[ \t]", interpreter) \
-            and os.path.isabs(interpreter) and os.path.isfile(interpreter) and os.access(interpreter, os.X_OK):
+    if first_line.startswith(b"#!") and first_line.endswith(b"\n") and len(first_line) <= 256 \
+            and "\r" not in interpreter and re.search("[ \t]", interpreter) and os.path.isabs(interpreter) \
+            and os.path.isfile(interpreter) and os.access(interpreter, os.X_OK):
         return interpreter
     return None
 
 
 def _launcher_is_usable(executable: str) -> bool:
     """Reject moved-venv scripts whose absolute shebang interpreter is gone."""
-    if _spaced_interpreter(executable):
-        return True
     try:
         with open(executable, "rb") as source:
             first_line = source.readline(4096)
         if first_line.startswith(b"#!"):
-            # Like the kernel, end the interpreter's name at the first space or tab only.
-            interpreter = re.split("[ \t]", _shebang(first_line))[0]
-            if any(character.isspace() for character in interpreter) and not _read_whole(first_line):
-                return False  # Other whitespace is part of the name only where the kernel reads all of it.
+            interpreter = first_line[2:].decode("utf-8").strip().split()[0]
             return os.path.isabs(interpreter) and os.access(interpreter, os.X_OK)
         return True  # Native executable; launch errors remain fatal.
     except (OSError, UnicodeError, IndexError):
@@ -526,7 +510,7 @@ def _ensure_semgrep_available() -> str:
         directories = [str(Path(sys.executable).parent), *os.get_exec_path()]
         candidates = [shutil.which(command, path=directory) for directory in directories]
     for executable in dict.fromkeys(candidates):
-        if executable and _launcher_is_usable(executable):
+        if executable and (_launcher_is_usable(executable) or _spaced_interpreter(executable)):
             return executable
     raise SemgrepInvocationError(
         exit_code=127,
