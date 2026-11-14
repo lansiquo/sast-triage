@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [2.6.3] - 2026-11-14
 ### Fixed
 - **A scan still exited with status 2, `[Errno 13] Permission denied`, when Semgrep was installed in a folder whose path has a space or a tab and the part of that path before the first space or tab names an existing folder; it now runs the pinned Semgrep.** For example, on a self-hosted runner with a folder `/home/ci/runner` beside its temporary folder `/home/ci/runner temp`, the GitHub Action installs Semgrep into `/home/ci/runner temp/sast-triage-venv`, and the scan stopped with `error: scan incomplete, no result issued.` and exit status 2. Now `scan_repo.py tests/fixtures/project`, run with that environment's Python, exits with status 1 for the planted P1, and a folder without findings exits with status 0. The launcher check reads `/home/ci/runner` as the interpreter and accepts it, because it checks only for execute permission, which a folder has too, so the scan started the launcher by itself, and the system starts only a regular file. A launcher is now started by itself only when that name is an executable regular file; otherwise the scan takes the route 2.6.1 added for a launcher whose whole first line after `#!` is an absolute path, with a space or tab, to an executable file: through that interpreter, with Semgrep's `--legacy` switch. A link to a folder or an executable named pipe in place of the folder is handled the same way. Which launchers are accepted or refused is unchanged, and so is how a launcher starts when that name is an executable file, a file without execute permission or missing, or when its interpreter's path has no space or tab. [W-sast-triage-58]
 
@@ -174,7 +176,8 @@ Upgrading from 1.0.0: the app reads `.env` only when `PRSEC_LOAD_DOTENV=1` (`mak
 ### Added
 - Initial tag and first protected merge baseline.
 
-[Unreleased]: https://github.com/lansiquo/sast-triage/compare/v2.6.2...HEAD
+[Unreleased]: https://github.com/lansiquo/sast-triage/compare/v2.6.3...HEAD
+[2.6.3]: https://github.com/lansiquo/sast-triage/compare/v2.6.2...v2.6.3
 [2.6.2]: https://github.com/lansiquo/sast-triage/compare/v2.6.1...v2.6.2
 [2.6.1]: https://github.com/lansiquo/sast-triage/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/lansiquo/sast-triage/compare/v2.5.0...v2.6.0

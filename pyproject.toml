@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 name = "sast-triage"
 # Written here by hand, with no version automation: a development release of the next version.
 # A release sets its final number on this line.
-version = "2.6.2"
+version = "2.6.3"
 description = "Semgrep review for Python, JavaScript and TypeScript: labels findings new or pre-existing, ranks them P1-P3 and fails only on new P1 findings."
 readme = "README.md"
 requires-python = ">=3.11"

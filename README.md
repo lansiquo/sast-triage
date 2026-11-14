@@ -27,7 +27,7 @@ In a workflow that runs on `pull_request`:
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0               # the base branch's history, to diff against it
-- uses: lansiquo/sast-triage@v2.6.2
+- uses: lansiquo/sast-triage@v2.6.3
   with:
     path: .                      # directory to scan
     base: ""                     # default: the pull request's base branch; "none" for a full scan
@@ -48,7 +48,7 @@ All five inputs are optional (defaults shown):
 
 The step fails when the gate fails and adds the summary to the job summary. It installs only
 `requirements-cli.txt` with the runner's Python, and it uses no token and no other actions. Pin a release
-tag such as `@v2.6.2`, or a full commit SHA for the strictest supply-chain safety. A pull request that can
+tag such as `@v2.6.3`, or a full commit SHA for the strictest supply-chain safety. A pull request that can
 edit the workflow can edit this step too; the
 [GitHub App](#review-pull-requests-with-a-github-app) runs outside the repository's workflows.
 
@@ -71,7 +71,7 @@ jobs:
           fetch-depth: 0
       - run: rm -rf sast-triage.sarif          # anything already at the path is not this scan's result
       - id: scan
-        uses: lansiquo/sast-triage@v2.6.2
+        uses: lansiquo/sast-triage@v2.6.3
         with:
           sarif: sast-triage.sarif
       - if: ${{ !cancelled() && steps.scan.outcome != 'skipped' && hashFiles('sast-triage.sarif') != '' }}
