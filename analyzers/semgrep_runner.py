@@ -466,17 +466,20 @@ def _spaced_interpreter(executable: str) -> Optional[str]:
 
     pip writes the whole path of the environment's Python after "#!" on a script's first line, but
     the kernel ends the interpreter's name at the first space or tab, and so does the check below.
-    Only for a launcher that check refuses: its first line ends in a newline within the 256 bytes
+    Only for a launcher that check refuses, or accepts though the name the kernel starts is not an
+    executable regular file, such as a folder: its first line ends in a newline within the 256 bytes
     the kernel reads, holds no carriage return, and all of it after "#!" is an absolute path, with a
     space or tab, to an executable regular file.
     """
-    if _launcher_is_usable(executable):
-        return None
+    usable = _launcher_is_usable(executable)
     try:
         with open(executable, "rb") as source:
             first_line = source.readline(4096)
         interpreter = first_line[2:-1].decode("utf-8")
     except (OSError, UnicodeError):
+        return None
+    started = re.split("[ \t]", interpreter, maxsplit=1)[0]   # the name the kernel starts
+    if usable and os.path.isfile(started) and os.access(started, os.X_OK):
         return None
     if first_line.startswith(b"#!") and first_line.endswith(b"\n") and len(first_line) <= 256 \
             and "\r" not in interpreter and re.search("[ \t]", interpreter) and os.path.isabs(interpreter) \

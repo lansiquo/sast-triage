@@ -59,6 +59,40 @@ def test_the_scan_runs_semgrep_installed_under_any_path(tmp_path, monkeypatch, c
     assert 'Gate: PASS' in capsys.readouterr().out
 
 
+# In "runner temp" the kernel starts "runner", and the launcher check accepts that name whenever it may be
+# executed, as a folder may, though the kernel starts only a regular file.
+NOT_A_FILE = {'folder': lambda path: path.mkdir(), 'link to a folder': lambda path: os.symlink(path.parent, path),
+              'executable named pipe': lambda path: (os.mkfifo(path), path.chmod(0o755))}
+
+
+@pytest.mark.parametrize('make', NOT_A_FILE.values(), ids=NOT_A_FILE)
+@pytest.mark.parametrize('name', ['runner temp', 'runner\ttemp'], ids=['space', 'tab'])
+def test_the_scan_runs_semgrep_when_the_name_before_the_space_is_not_a_file(tmp_path, monkeypatch, capsys, project,
+                                                                            name, make):
+    folder = install(tmp_path / name / 'sast-triage-venv' / 'bin')
+    make(tmp_path / 'runner')
+    monkeypatch.setattr(runner.sys, 'executable', str(folder / 'python'))
+    assert runner._launcher_is_usable(str(folder / 'semgrep'))   # accepted, as before
+    assert scan_repo.main([str(project)]) == 0, capsys.readouterr().err
+    assert 'Gate: PASS' in capsys.readouterr().out
+
+
+# How the launcher starts when the name before the space is a file or nothing, as at 7de5f48: by itself (None)
+# when the kernel can start that name, or else through the interpreter its whole first line names.
+BESIDE = {'executable file': (lambda path: os.symlink(sys.executable, path), False),
+          'file that is not executable': (lambda path: path.write_text(''), True), 'nothing': (lambda path: None, True)}
+
+
+@pytest.mark.parametrize('make, spaced', BESIDE.values(), ids=BESIDE)
+def test_a_launcher_starts_as_before_when_the_name_before_the_space_is_a_file_or_nothing(tmp_path, monkeypatch,
+                                                                                        project, make, spaced):
+    folder = install(tmp_path / 'runner temp' / 'sast-triage-venv' / 'bin')
+    make(tmp_path / 'runner')
+    monkeypatch.setenv('SEMGREP_BIN', str(folder / 'semgrep'))
+    assert runner._ensure_semgrep_available() == str(folder / 'semgrep')
+    assert runner._spaced_interpreter(str(folder / 'semgrep')) == (str(folder / 'python') if spaced else None)
+
+
 # Under a path with a space these were refused at dc0c8be, and the new route takes none of them.
 UNSTARTABLE = {'CRLF': b'#!{bin}/python\r', 'carriage return inside': b'#!{bin}/py\rthon',
                'trailing vertical tab': b'#!{bin}/python\x0b', 'trailing no-break space': b'#!{bin}/python\xc2\xa0',
