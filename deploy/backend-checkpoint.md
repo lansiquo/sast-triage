@@ -15,7 +15,7 @@ GitHub rate-limit behavior follows https://docs.github.com/en/rest/using-the-res
 
 ## Prioritized remaining gates
 
-1. Resolve the five Semgrep dependency advisories with a supported upstream version/distribution. Current inspected 1.182.1 pins exclude the patched MCP/OpenTelemetry versions. Keep the separately audited service environment isolated; do not force incompatible overrides or waive findings.
+1. Resolve the five Semgrep dependency advisories with a supported upstream version/distribution. Current inspected 1.182.1 pins exclude the patched MCP/OpenTelemetry versions. Keep the separately audited service environment isolated; do not force incompatible overrides or waive findings. Note added 2026-11-15: [decision 0002](../docs/decisions/0002-durable-scanner.md) (2026-11-12) chose Semgrep 1.79.0, the existing pin, so 1.182.1 is not used; for the chosen version this gate is the decision's compatibility evidence and the image audit, which have not run. The 15-rule results in this checkpoint were with 1.182.1 and are not evidence for 1.79.0 and its 41 rules.
 2. Run `deploy/test_container_boundary.py` on the approved Linux VM with the final digest-pinned rootless scanner image. Audit that image and execute scanner fixtures there. Existing harness and runbook remain prepared; actual runtime isolation is unverified on this Mac.
 3. Verify real GitHub installation scope, webhook delivery/recovery and exact-commit Check behavior in the approved target repository when deployment credentials/network placement is authorized. No mocked test clears this gate.
 

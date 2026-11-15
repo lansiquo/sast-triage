@@ -20,6 +20,8 @@ Its official source dependency declaration includes neither MCP nor OpenTelemetr
 
 Recommendation: retain Opengrep 1.33.0 as the preferred candidate for the mini PC image, contingent on complete signature verification, Linux image/SBOM audit, and actual container tests. Switching the deployment's scanner remains an explicit choice. The current Semgrep package's original five findings remain unresolved and are not waived.
 
+Superseded (note added 2026-11-15): [decision 0002](../docs/decisions/0002-durable-scanner.md) (2026-11-12) chose Semgrep 1.79.0, the existing pin, for durable mode and did not choose Opengrep. The recommendation above is kept as the evaluation recorded it.
+
 ## Concrete code improvements
 
 - Reject files larger than 1 MiB before scanner invocation.
@@ -37,6 +39,8 @@ The local suite includes real subprocess execution proving that repository `.env
 The fake scanner used for process-isolation tests checks only staging and environment boundaries. A normal host subprocess is **not** a filesystem/network sandbox. Unit tests of Docker argument construction and rootless-daemon rejection do **not** prove container isolation.
 
 The actual Opengrep and Semgrep 1.182.1 executables both passed the 15-rule compatibility fixture in local subprocesses. These fixture source files are never executed.
+
+Note added 2026-11-15: these results are for Opengrep 1.33.0 and Semgrep 1.182.1 with the 15 rules of that time. They are not evidence for the chosen scanner: decision 0002 requires its compatibility evidence for Semgrep 1.79.0 and the 41 rules in `trusted_rules.py`, and none of it has been shown for a deployment.
 
 ## Reproduce local evaluations
 
@@ -60,9 +64,9 @@ For the existing Semgrep comparison, use `PRSEC_SCANNER_COMMAND=semgrep` and `SE
 - Two Linux service users: `prsec-web` with only the webhook secret and queue access; `prsec-worker` with the existing App PEM, queue access and its own rootless Docker daemon. Shared queue group/directory mode 2770; database mode 660; umask 0007. Validate WAL/SHM cross-user access on Linux.
 - Rootless Docker with functional cgroup v2 CPU/memory/PID controls. Do not expose its socket to the web service or scanner container. No Docker installation or host security change was made on the Mac.
 - Persistent SQLite state and backups, worker restart supervision, queue-age/error monitoring. No horizontal replicas or network filesystem for this design.
-- An approved, digest-pinned Linux scanner image with signature/provenance, complete SBOM and vulnerability review. For explicit Opengrep selection set `PRSEC_SCANNER_COMMAND=opengrep`; runtime image pulling is disabled.
-- Approval before transferring the existing App PEM or webhook secret to the VM. Reuse App ID 1776205 and installation 80788483. Runtime tokens request only Contents read, Pull requests read and Checks write for `lansiquo/sast-triage`. No permission expansion is needed; the App credential itself retains its existing broader authority.
-- An independently approved ingress/TLS plan before changing the Smee webhook. No tunnel, firewall, routing or DNS changes are part of this preparation.
+- An approved, digest-pinned Linux scanner image holding Semgrep 1.79.0 from the existing pin (decision 0002), with signature/provenance, complete SBOM and vulnerability review. Keep `PRSEC_SCANNER_COMMAND=semgrep`; a durable deployment does not select Opengrep. Runtime image pulling is disabled.
+- Approval before transferring the existing App PEM or webhook secret to the VM. Reuse App ID 1776205 and installation 80788483. Runtime tokens request only Contents read, Pull requests read and Checks write for `lansiquo/sast-triage`. No permission expansion is needed. [Decision 0001](../docs/decisions/0001-hosting-and-trust.md) narrows the installation to the repositories the service scans, an App setting change that needs its own approval; until then the App credential itself retains its existing broader authority.
+- An independently approved ingress/TLS plan before changing the Smee webhook. Decision 0001 chooses the way in, a tunnel the VM opens outbound with no inbound port; setting it up still needs approval. No tunnel, firewall, routing or DNS changes are part of this preparation.
 
 ## Actual rootless boundary test (prepared, not run)
 
@@ -75,7 +79,7 @@ PRSEC_SCANNER_BACKEND=docker .venv-service/bin/python deploy/validate_scanner.py
 
 The boundary probe refuses non-Linux and non-rootless environments. It checks real container UID, no external network interfaces, effective capabilities, no-new-privileges, cgroup memory/PID limits, read-only root/source/rules mounts, absence of host marker/credential environment, and absence of a Docker socket. It cleans up its named container. Follow with actual malicious archive, scanner output/timeout, memory-limit termination and worker-crash recovery tests. Verify the Linux cross-UID queue and web-user denial of PEM/socket access separately.
 
-**Still unrun:** actual Docker/container boundaries, final Linux image/native audit, successful transparency-log signature verification, cross-UID Linux permissions, mini-PC resource measurements, and live GitHub webhook/Check delivery. Deployment is not complete until these gates pass.
+**Still unrun:** actual Docker/container boundaries, final Linux image/native audit, cross-UID Linux permissions, mini-PC resource measurements, and live GitHub webhook/Check delivery. Deployment is not complete until these gates pass. The Opengrep transparency-log signature verification also never succeeded; since decision 0002 did not choose Opengrep, it is not a go-live step.
 
 ## Exact-identity verification and credential boundary follow-up
 
