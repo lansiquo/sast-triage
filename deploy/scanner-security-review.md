@@ -1,6 +1,8 @@
 # Scanner dependency review
 
-**Status: unresolved; deployment gate remains closed.** No vulnerability ignore list, dependency override, package metadata edit, or risk waiver was applied.
+**Status: unresolved for Semgrep 1.182.1; deployment gate remains closed.** No vulnerability ignore list, dependency override, package metadata edit, or risk waiver was applied.
+
+Note added 2026-11-15: [decision 0002](../docs/decisions/0002-durable-scanner.md) (2026-11-12) chose Semgrep 1.79.0, the version `requirements.txt` and `requirements-cli.txt` already pin, so 1.182.1 is not used and the remaining options below are superseded. This review is kept as it was. The scanner gate is still closed: for 1.79.0 it is the decision's compatibility evidence plus the image audit and container tests of gate 3 in [README.md](README.md#approval-gates), and none of them has run for a deployment.
 
 ## Supported-version investigation
 

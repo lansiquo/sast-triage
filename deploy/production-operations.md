@@ -70,7 +70,7 @@ export PRSEC_SCANNER_IMAGE='APPROVED_IMAGE@sha256:APPROVED_DIGEST'
 .venv-service/bin/python deploy/accept_linux.py
 ```
 
-The runner executes actual container-boundary probes and all 41 production rules. It installs nothing, pulls no image, changes no settings and makes no GitHub calls. It fails immediately on macOS/root or if application credentials are present. Remaining explicit gates: dependency/OS/SBOM audit, separate-UID PEM/socket denial, OOM/PID exhaustion and host reboot recovery, approved HTTPS ingress, and real GitHub delivery/Check/crash-recovery tests. Existing detailed boundary/release runbooks still apply.
+The runner executes actual container-boundary probes and all 41 production rules. It installs nothing, pulls no image, changes no settings and makes no GitHub calls. It fails immediately on macOS/root or if application credentials are present. Remaining explicit gates: dependency/OS/SBOM audit, separate-UID PEM/socket denial, OOM/PID exhaustion and host reboot recovery, approved HTTPS ingress (through a tunnel the VM opens outbound, [decision 0001](../docs/decisions/0001-hosting-and-trust.md)), and real GitHub delivery/Check/crash-recovery tests. Existing detailed boundary/release runbooks still apply.
 
 ## Current evidence
 
@@ -79,6 +79,6 @@ The runner executes actual container-boundary probes and all 41 production rules
 - New production tests cover scope/ref validation, deduplication, restart, atomic/concurrent fanout, capacity rollback, rate-limit cooldown, WAL backup/restore, non-overwrite, schema refusal, legacy quarantine/Check identity and safe configuration output.
 - GitHub APIs are mocked; SQLite files/concurrency/backup/restore are real local operations.
 - `deploy/accept_linux.py` on this Mac exits with **BLOCKED: approved Linux host and non-root worker user required; no tests ran.** Docker's selected daemon remains unreachable. No runtime installation/start or host security changes occurred.
-- Official PyPI was checked once: Semgrep 1.182.1 still pins MCP 1.29.0 and OpenTelemetry API ~=1.37.0. Known compatible dependency remediation remains unavailable; no override or waiver applied.
+- Official PyPI was checked once: Semgrep 1.182.1 still pins MCP 1.29.0 and OpenTelemetry API ~=1.37.0. Known compatible dependency remediation remains unavailable; no override or waiver applied. [Decision 0002](../docs/decisions/0002-durable-scanner.md) (2026-11-12) since chose Semgrep 1.79.0, so 1.182.1 is not used.
 
 The mini PC is one host option, not a software dependency. The next prerequisite is an approved Linux rootless test environment and an audited compatible scanner image. GitHub push subscription/host secrets/live test PR require their specific approvals at activation time.

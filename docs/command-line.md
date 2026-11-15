@@ -8,6 +8,9 @@ the files a scan skips, the package build and the exit codes.
 - Requires Python 3.11–3.14.
 - `requirements-cli.txt` installs only Semgrep (pinned to the tested 1.79.0) and certifi.
 - Set `SEMGREP_BIN` to use another Semgrep.
+- Leave `PRSEC_SEMGREP_MIN_SEVERITY` unset. If set, findings below that severity are dropped before
+  triage, so they are never reported and can't fail the gate: see
+  [Severity floor](github-app.md#severity-floor).
 - A scan needs no GitHub account, token or network.
 
 ## Options
@@ -61,6 +64,21 @@ escaped so that a file name can't add a command of its own;
 
 A full scan skips files in `.git`, `.hg`, `.svn`, `node_modules`, `vendor`, `dist`, `build`, `coverage`,
 `.venv`, `venv` and `__pycache__` folders, and minified `*.min.js`, `*.min.mjs` and `*.min.cjs` files.
+It also skips Python packages under any folder name: every folder with a `pyvenv.cfg` file (a virtual
+environment, such as `sast-venv`) and every `site-packages` or `dist-packages` folder, including the
+directory you scan. In a git work tree this rule skips only untracked files: it never skips a tracked
+file, so a committed `pyvenv.cfg` can't hide committed code. When nothing is left to
+scan, the report says why and the gate passes, as it does when there are no files.
+
+When the directory is in a git work tree, a full scan reads only the files that
+`git ls-files --cached --others --exclude-standard` lists: tracked files, even if a `.gitignore` pattern
+matches them, and untracked files git does not ignore. A folder git ignores, such as an untracked build
+output, is not scanned; a submodule or nested repository is not either. If git fails, the scan stops with
+exit status 2. Outside a work tree every other folder is read.
+
+The report, the Markdown summary and `--json` (`skipped_paths`, each with a `reason`) name what these rules
+left out, for example `Skipped: sast-venv/ (virtual environment), 3 paths git ignores.` The scanned
+directory is named `./`, and a folder whose tracked files were scanned is marked `untracked files only`.
 
 With `--base`, changed files in `vendor`, `dist`, `build` and `coverage` are scanned too, as the GitHub
 App scans them. Changed files it still skips are listed. The project's git diff helpers are not used.

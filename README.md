@@ -88,6 +88,9 @@ sast-venv/bin/python sast-triage/scan_repo.py /path/to/project --base origin/mai
 scan_repo.py DIRECTORY [--base REF] [--json] [--markdown FILE] [--sarif FILE] [--timeout SECONDS] [--github-annotations]
 ```
 
+A whole-project scan skips virtual environments (folders with a `pyvenv.cfg`) and `site-packages` or
+`dist-packages` folders, even the one scanned, and what git ignores; neither rule skips a tracked file.
+It lists what it skipped ([skipped files](docs/command-line.md#skipped-files)).
 [docs/command-line.md](docs/command-line.md) explains every option.
 
 ## Install as a package (local build)
@@ -134,7 +137,7 @@ lists them all.
 
 ## Scope and limits
 
-- **Nothing in the scanned project is run or installed.** Its Semgrep rules, ignore files and
+- **Nothing in the scanned project is run or installed.** Its Semgrep rules, Semgrep ignore files and
   `nosemgrep` comments are not used, and Semgrep never downloads rules.
 - **Rules match within one file.** A value that passes through another function or module before it
   reaches a dangerous call is not traced.

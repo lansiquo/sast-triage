@@ -58,6 +58,9 @@ Test code follows pytest, Django and JavaScript naming:
 The gate fails only when a finding is both new and P1. Scanner errors and partial results also fail it.
 Only a complete scan can pass.
 
+Findings below a severity floor set with `PRSEC_SEMGREP_MIN_SEVERITY` are dropped before triage, so they
+never reach the gate. By default it drops nothing: see [Severity floor](github-app.md#severity-floor).
+
 ## Limits
 
 The README's [Scope and limits](../README.md#scope-and-limits) say what triage can't see: rules match

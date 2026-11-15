@@ -2,15 +2,17 @@
 
 The mini PC itself is not a technical dependency. An approved Linux VM with the required separation and rootless runtime can validate the same controls. No host was installed, started or reconfigured during this checkpoint.
 
+Note added 2026-11-15: this checkpoint was recorded with Semgrep 1.182.1 and the 15 service-owned rules of that time. [Decision 0002](../docs/decisions/0002-durable-scanner.md) (2026-11-12) chose Semgrep 1.79.0, the existing pin, and `trusted_rules.py` now holds 41 rules, so these results are not evidence for the chosen scanner. The decision lists the compatibility evidence a deployment must show; none of it has been shown.
+
 ## Verified components and blockers
 
 | Component | Current evidence | Remaining gate |
 |---|---|---|
 | Webhook, durable queue, recovery and reporting | Full current suite passed with isolated service dependencies and official Semgrep 1.182.1; GitHub calls use controlled mocks, SQLite uses real local databases | Real installation delivery, exact-commit Checks and remote crash recovery still unverified |
 | Production rules | All 15 service-owned rules detect their fixtures; nosemgrep cannot suppress MD5; clean comparison passes | Repeat on final audited Linux image |
-| Scanner package | Isolated Semgrep 1.182.1 has MCP 1.29.0 and OpenTelemetry API 1.37.0 | Five known advisories still apply; no compatible supported latest release found |
+| Scanner package | Isolated Semgrep 1.182.1 has MCP 1.29.0 and OpenTelemetry API 1.37.0 | Five known advisories still apply; no compatible supported latest release found. Decision 0002 chose Semgrep 1.79.0 instead: its compatibility evidence and the image audit remain |
 | Host containment | Docker, Colima and Lima CLIs are installed; selected desktop-linux daemon is unreachable, Colima reports stopped, Lima lists no instance | An approved running **rootless Linux** Docker runtime; ordinary Docker Desktop startup alone is not proof of this requirement |
-| Deployment configuration | Existing App ID 1776205, existing PEM path, and plural GITHUB_WEBHOOK_SECRETS configuration are present locally; no values printed | Approved target-specific durable settings, separate service identities, protected state, audited image digest and approved HTTPS ingress |
+| Deployment configuration | Existing App ID 1776205, existing PEM path, and plural GITHUB_WEBHOOK_SECRETS configuration are present locally; no values printed | Approved target-specific durable settings, separate service identities, protected state, audited image digest and approved HTTPS ingress through a tunnel the VM opens outbound (decision 0001) |
 
 The configured deployment example targets `lansiquo/sast-triage`, installation `80788483`. Those are existing configuration identifiers, **not a fresh assertion that the live installation/permissions still match**. No App JWT or installation token was created for this inspection; no authenticated GitHub calls or remote writes occurred. Existing source requests installation tokens limited to the selected repository with contents:read, pull_requests:read and checks:write. If that installation lacks these permissions, a separately approved permissions change would be needed; it was not assumed or performed.
 
@@ -46,7 +48,7 @@ export PRSEC_LOAD_DOTENV=0
 
 The first harness checks actual UID, network namespace, capabilities/no-new-privileges, memory/PID limits, read-only mounts, writable bounded tmpfs and lack of secret/socket mounts. It requires the probe tools listed in its source. The second checks actual scanner compatibility. Neither alone clears cross-user PEM/socket permissions, all resource-exhaustion cases, complete image audit, or live GitHub recovery: execute the additional [release checks](README.md#required-release-verification) and [trust-boundary plan](trust-boundaries.md).
 
-For live integration, approve the target host/HTTPS destination and secure placement of existing secrets, verify current App installation scope, then authorize the labelled temporary test PR in the intended repository. No new App, expanded grants or token creation were performed here. Until then, remote integration remains unverified, rather than presumed broken.
+For live integration, approve the target host/HTTPS destination, reached only through a tunnel the VM opens outbound ([decision 0001](../docs/decisions/0001-hosting-and-trust.md)), and secure placement of existing secrets, verify current App installation scope (decision 0001 narrows it to the repositories the service scans), then authorize the labelled temporary test PR in the intended repository. No new App, expanded grants or token creation were performed here. Until then, remote integration remains unverified, rather than presumed broken.
 
 ## Latest local validation
 
