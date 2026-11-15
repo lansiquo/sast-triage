@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+- **The README is now a short guide: 898 words by `wc -w`, down from 3,524, with the details on six linked pages in `docs/`.** Documentation only. The README keeps what sast-triage is, its status (latest release v2.6.3), the GitHub Action with its five inputs and the code scanning upload job, the command line, the local package build, a summary of triage and the rules, exit codes 0, 1 and 2, and "Scope and limits". That section keeps its four limits word for word and now also says that nothing in the scanned project is run or installed. The details moved to `docs/github-action.md` (each input, the upload steps, pinning), `docs/command-line.md` (every option, SARIF and annotations, skipped files, the package, every exit status 2 case), `docs/triage.md` (priorities, new or pre-existing, test code, the gate), `docs/rules.md` (all 41 rules), `docs/github-app.md` (running the webhook service) and `docs/nodegoat-example.md` (the OWASP NodeGoat scans, rerun at its commit `c5cb68a` with the same results). No statement was dropped, and no code, scan result or exit status changes. [W-sast-triage-60]
 
 ## [2.6.3] - 2026-11-14
 ### Fixed
