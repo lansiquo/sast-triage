@@ -9,7 +9,7 @@ Findings are review aids, not a security audit. Its companion
 
 ## Status
 
-- Latest release: [v2.6.3](https://github.com/lansiquo/sast-triage/releases/tag/v2.6.3).
+- Latest release: [v2.6.4](https://github.com/lansiquo/sast-triage/releases/tag/v2.6.4).
 - Use the GitHub Action or the command line.
 - The [GitHub App](docs/github-app.md) service runs locally. Its durable mode is prepared but not live.
 
@@ -21,7 +21,7 @@ In a workflow that runs on `pull_request`:
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0               # needed for the diff
-- uses: lansiquo/sast-triage@v2.6.3
+- uses: lansiquo/sast-triage@v2.6.4
   with:                          # the defaults
     path: .
     base: ""
@@ -60,7 +60,7 @@ jobs:
           fetch-depth: 0
       - run: rm -rf sast-triage.sarif          # remove any stale file
       - id: scan
-        uses: lansiquo/sast-triage@v2.6.3
+        uses: lansiquo/sast-triage@v2.6.4
         with:
           sarif: sast-triage.sarif
       - if: ${{ !cancelled() && steps.scan.outcome != 'skipped' && hashFiles('sast-triage.sarif') != '' }}
