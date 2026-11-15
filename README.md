@@ -38,7 +38,7 @@ All five inputs are optional (defaults shown):
 | `base` | `""` | Ref to compare with. Empty: the pull request's base branch, or a full scan on other events. `none`: a full scan |
 | `timeout` | `""` | Scanner time limit in seconds, passed as `--timeout`. Empty: 300 seconds |
 | `sarif` | `""` | Also write the findings to this file, passed as `--sarif` |
-| `annotations` | `"false"` | `"true"` adds `--github-annotations`. Any other value but `"false"` stops the step with exit status 2 |
+| `annotations` | `"false"` | `"true"` adds `--github-annotations`. `"false"` adds nothing. Other values stop the step with exit status 2 |
 
 The step fails when the gate fails and writes the job summary. It installs only `requirements-cli.txt`,
 and it uses no token and no other actions.

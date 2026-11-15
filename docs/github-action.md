@@ -13,7 +13,7 @@ All five inputs are optional.
 | `base` | `""` | Git ref to compare with. Empty: the pull request's base branch, or a full scan on other events. `none`: always a full scan |
 | `timeout` | `""` | Scanner time limit in seconds, passed as `--timeout`. Empty: the default of 300 seconds |
 | `sarif` | `""` | File to also write the findings to, passed as `--sarif`. A relative path is relative to the workspace. Empty: no SARIF file |
-| `annotations` | `"false"` | `"true"` adds `--github-annotations`. Any value other than `"true"` or `"false"`, an empty one included, stops the step with exit status 2 before the scan |
+| `annotations` | `"false"` | `"true"` adds `--github-annotations`. `"false"` adds nothing. Any value other than `"true"` or `"false"`, an empty one included, stops the step with exit status 2 before the scan |
 
 The checkout needs `fetch-depth: 0`, so the base branch's history is there to diff against.
 
