@@ -64,6 +64,17 @@ escaped so that a file name can't add a command of its own;
 
 A full scan skips files in `.git`, `.hg`, `.svn`, `node_modules`, `vendor`, `dist`, `build`, `coverage`,
 `.venv`, `venv` and `__pycache__` folders, and minified `*.min.js`, `*.min.mjs` and `*.min.cjs` files.
+It also skips Python packages under any folder name: every folder with a `pyvenv.cfg` file (a virtual
+environment, such as `sast-venv`) and every `site-packages` or `dist-packages` folder.
+
+When the directory is in a git work tree, a full scan reads only the files that
+`git ls-files --cached --others --exclude-standard` lists: tracked files, even if a `.gitignore` pattern
+matches them, and untracked files git does not ignore. A folder git ignores, such as an untracked build
+output, is not scanned; a submodule or nested repository is not either. If git fails, the scan stops with
+exit status 2. Outside a work tree every folder is read.
+
+The report, the Markdown summary and `--json` (`skipped_paths`, each with a `reason`) name what these rules
+left out, for example `Skipped: sast-venv/ (virtual environment), 3 paths git ignores.`
 
 With `--base`, changed files in `vendor`, `dist`, `build` and `coverage` are scanned too, as the GitHub
 App scans them. Changed files it still skips are listed. The project's git diff helpers are not used.

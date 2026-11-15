@@ -38,6 +38,10 @@ EXCLUDED_DIRS = ('.git', 'node_modules', 'vendor', 'dist', 'build', 'coverage',
 # App scans them, so a change can't hide code there. Folders the scanner refuses, installed
 # dependencies and minified files are still left out, and the changed files there are listed.
 CHANGED_EXCLUDED_DIRS = ('.git', '.hg', '.svn', '.venv', 'venv', '__pycache__', 'node_modules')
+# Installed Python packages under any folder name: a virtual environment is a folder with a pyvenv.cfg
+# file, and pip installs into site-packages and dist-packages folders. A full scan leaves them out and lists them.
+PACKAGE_DIRS = ('site-packages', 'dist-packages')
+IGNORED = 'ignored by git'   # the reason given for a path a full scan in a git work tree leaves out
 MINIFIED = re.compile(r'\.min\.[cm]?js$')
 MAX_FILE_BYTES = 1024 * 1024   # the runner's per-file limit
 RULE_COUNT = len(re.findall(r'^  - id: ', OFFLINE_RULESET, re.M))
@@ -198,19 +202,98 @@ def base_findings(root: Path, base: str, previous: dict, config: str, timeout: i
     return baseline
 
 
+def environment(folder: Path):
+    """Why a full scan leaves the folder out as installed Python packages, or None."""
+    if (folder / 'pyvenv.cfg').is_file():
+        return 'virtual environment'
+    return 'installed Python packages' if folder.name in PACKAGE_DIRS else None
+
+
+def printable(name: str) -> str:
+    """A listed name as it is printed: in ASCII (ascii_name) when it is not valid UTF-8."""
+    return name if is_utf8_name(name) else ascii_name(name)
+
+
 def source_files(root: Path):
-    """Repository-relative paths of every supported source file, sorted. Symbolic links are skipped."""
+    """Repository-relative paths of every supported source file, sorted, and the paths left out, with why.
+
+    In a git work tree (the folder or one above it has a .git) the files are the ones
+    `git ls-files --cached --others --exclude-standard` lists: tracked files, even if an ignore pattern
+    matches them, and untracked files git does not ignore. What git ignores is left out and listed. Outside a
+    work tree every folder is read. Either way the EXCLUDED_DIRS folders, virtual environments and package
+    folders (environment()) and symbolic links are left out. Returns (files, [(path, reason)]).
+    A folder that can't be listed raises OSError, and a git failure raises DiffError.
+    """
     def unreadable(error):
         raise error   # a folder that can't be listed must not be skipped silently
 
-    found = []
-    for directory, folders, files in os.walk(root, onerror=unreadable):   # does not follow linked folders
-        folders[:] = [name for name in folders if name not in EXCLUDED_DIRS]
-        for name in files:
-            path = Path(directory, name)
-            if is_source_path(name) and not MINIFIED.search(name) and not path.is_symlink() and path.is_file():
-                found.append(path.relative_to(root).as_posix())
-    return sorted(found)
+    found, skipped = [], set()
+    # A work tree, as git finds one: a .git file (a linked work tree or a submodule) or a .git folder with a HEAD.
+    if not any((folder / '.git').is_file() or (folder / '.git' / 'HEAD').is_file() for folder in (root, *root.parents)):
+        for directory, folders, files in os.walk(root, onerror=unreadable):   # does not follow linked folders
+            kept = []
+            for name in folders:
+                folder = Path(directory, name)
+                reason = None if name in EXCLUDED_DIRS or folder.is_symlink() else environment(folder)
+                if reason:
+                    skipped.add((printable(folder.relative_to(root).as_posix()) + '/', reason))
+                elif name not in EXCLUDED_DIRS:
+                    kept.append(name)
+            folders[:] = kept
+            for name in files:
+                path = Path(directory, name)
+                if is_source_path(name) and not MINIFIED.search(name) and not path.is_symlink() and path.is_file():
+                    found.append(path.relative_to(root).as_posix())
+        return sorted(found), sorted(skipped)
+    # The -z lists are bytes, so every name is read exactly as git lists it (os.fsdecode, as os.walk reads it).
+    listed = git(root, 'ls-files', '--cached', '--others', '--exclude-standard', '-z', binary=True)
+    ignored = git(root, 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory',
+                  '--no-empty-directory', '-z', binary=True)
+    reasons = {}   # folder -> environment(folder)
+    for path in sorted({os.fsdecode(name).rstrip('/') for name in listed.split(b'\0') if name}):
+        parts = path.split('/')
+        if any(part in EXCLUDED_DIRS for part in parts[:-1]):
+            continue
+        for depth in range(1, len(parts)):
+            folder = '/'.join(parts[:depth])
+            if folder not in reasons:
+                reasons[folder] = environment(root / folder)
+            if reasons[folder]:
+                skipped.add((printable(folder) + '/', reasons[folder]))
+                break
+        else:
+            file = root / path   # a tracked file may be gone, or replaced by a link or reached through one
+            if file.is_dir() and not file.is_symlink():   # git lists a submodule or nested repository, not its files
+                skipped.add((printable(path) + '/', 'separate git repository'))
+            elif scannable(path) and file.is_file() and file.resolve() == file:
+                found.append(path)
+    inside = None   # the last ignored folder listed: git lists what is in it after it, and it stands for them
+    for path in sorted(os.fsdecode(name) for name in ignored.split(b'\0') if name):
+        if inside and path.startswith(inside):
+            continue
+        inside = path if path.endswith('/') else inside
+        if not any(part in EXCLUDED_DIRS for part in path.split('/')[:-1]):
+            skipped.add((printable(path), IGNORED))
+    return found, sorted(skipped)
+
+
+def skipped_paths(skipped, code=False):
+    """The paths a full scan left out, on one line: `sast-venv/ (virtual environment), 3 paths git ignores`.
+
+    Folders of installed packages are named, at most 10 with code=True (the Markdown summary, where each name
+    is code, escaped as in skipped_note()); the paths git ignores are counted. --json lists them all.
+    """
+    folders = [(path, reason) for path, reason in skipped if reason != IGNORED]
+    ignored = len(skipped) - len(folders)
+    if code:
+        named = ['`' + re.sub(r'[\x00-\x1f`|]', '?', path) + f'` ({reason})' for path, reason in folders[:10]]
+        if len(folders) > 10:
+            named.append(f'{len(folders) - 10} more folders')
+    else:
+        named = [f'{path} ({reason})' for path, reason in folders]
+    if ignored:
+        named.append(f'{ignored} path{"s" if ignored > 1 else ""} git ignores')
+    return ', '.join(named)
 
 
 # Control characters, and the two Unicode characters that end a line: all that can break a printed line.
@@ -383,7 +466,7 @@ def main(argv=None):
     if args.base == '':   # every check below reads an empty ref as "no --base", which would run a full scan
         parser.error('--base needs a git ref; leave out --base for a full scan')
     root = args.directory.resolve()
-    previous, skipped = {}, []
+    previous, skipped, left_out = {}, [], []
     if args.base:
         try:
             changed, previous, skipped = changes_since(root, args.base)
@@ -399,8 +482,8 @@ def main(argv=None):
             return ERROR
     else:
         try:
-            files = source_files(root)
-        except OSError as error:
+            files, left_out = source_files(root)
+        except (OSError, DiffError) as error:
             print(f'error: cannot list the project files, no result issued.\n{log_safe(str(error), lines=True)}',
                   file=sys.stderr)
             return ERROR
@@ -466,7 +549,8 @@ def main(argv=None):
                 except OSError:
                     pass   # it can't be put back if the rename fails, and the error then says so
             try:
-                args.markdown.write_text(markdown(findings, args.base) + skipped_note(skipped) + '\n')
+                note = f'\n\nSkipped: {skipped_paths(left_out, code=True)}.' if left_out else ''
+                args.markdown.write_text(markdown(findings, args.base) + skipped_note(skipped) + note + '\n')
             except OSError as error:
                 print(f'error: could not write the Markdown file {args.markdown}, no result issued.\n{error}',
                       file=sys.stderr)
@@ -495,9 +579,10 @@ def main(argv=None):
             staged.unlink(missing_ok=True)
     scan = f'changes since {args.base}' if args.base else 'full: every finding counts as new'
     if args.json:
+        left_out_json = {} if args.base else {'skipped_paths': [{'path': p, 'reason': r} for p, r in left_out]}
         print(log_safe(json.dumps({'directory': str(args.directory), 'scan': scan, 'base': args.base,
                                    'files_scanned': len(files), 'files': files, 'rules': RULE_COUNT,
-                                   'skipped_changed_files': skipped, 'conclusion': conclusion,
+                                   'skipped_changed_files': skipped, **left_out_json, 'conclusion': conclusion,
                                    'counts': summarize_findings(findings)[0], 'findings': findings}, indent=2),
                        json_text=True))
     else:
@@ -516,6 +601,8 @@ def main(argv=None):
               '*.min.js files.')
         if skipped:
             print(log_safe(f'Skipped changed files: {", ".join(skipped)}'))
+        if left_out:
+            print(log_safe(f'Skipped: {skipped_paths(left_out)}.'))
         if files:
             print_summary(title, findings, conclusion, args.base)
         else:
