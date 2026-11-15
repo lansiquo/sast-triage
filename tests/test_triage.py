@@ -6,8 +6,8 @@ import pytest
 import app
 from analyzers import semgrep_runner as runner
 from analyzers.semgrep_runner import add_fingerprints, summarize_findings, to_github_annotations
-from analyzers.triage import (added_lines, baseline_counts, changed_lines, gate, is_source_path, is_test_path,
-                              needs_base, priority, triage)
+from analyzers.triage import (ChangedLines, added_lines, baseline_counts, changed_lines, gate, is_source_path,
+                              is_test_path, needs_base, priority, triage)
 
 # Two hunks: line 2 changed, line 3 added, then line 22 changed further down.
 PATCH = """@@ -1,4 +1,5 @@
@@ -40,6 +40,22 @@ def test_added_lines():
         assert added_lines(patch) == expected, repr(patch)
 
 
+# Unchanged line in the new file: its line in the old file.
+BASE_LINES = [
+    (PATCH, {1: 1, 4: 3, 5: 4, 6: 5, 20: 19, 21: 20, 23: 22}),      # context rows and the lines between hunks
+    ('@@ -2,0 +3,2 @@\n+a\n+b', {1: 1, 2: 2, 5: 3}),                  # two lines added after line 2
+    ('@@ -2,2 +1,0 @@\n-a\n-b', {1: 1, 2: 4}),                         # lines 2 and 3 removed
+    ('@@ -3 +3,2 @@\n-a\n+b\n+c\n@@ -9,2 +10 @@\n-d\n-e\n+f', {2: 2, 5: 4, 9: 8, 11: 11}),
+]
+
+
+def test_added_lines_map_each_unchanged_line_to_its_base_line():
+    for patch, expected in BASE_LINES:
+        lines = added_lines(patch)
+        assert {n: lines.base_line(n) for n in expected} == expected, repr(patch)
+    assert ChangedLines().base_line(7) == 7          # no hunks: a rename without edits
+
+
 # Characters str.splitlines() treats as line breaks but Git, GitHub and Semgrep
 # do not. All are legal inside a Python comment.
 SPLITLINES_ONLY_BREAKS = ['\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\x85', ' ', ' ']
@@ -62,6 +78,9 @@ HEADER_MISMATCHES = [
     '@@ -1 +1 @@\n-x\n-y\n+z',                            # more old lines than declared
     '@@ -1,2 +1,2 @@\n a\n@@ -9 +9 @@\n-x\n+y',          # header before the previous hunk is complete
     '@@ -0,0 +1 @@\n+a\n+b',                              # omitted count means one line
+    '@@ -5 +5 @@\n-a\n+b\n@@ -1 +1 @@\n-c\n+d',              # hunks out of order
+    '@@ -1 +1 @@\n-a\n+b\n@@ -5 +6 @@\n-c\n+d',              # the lines between the hunks would differ
+    '@@ -3 +4 @@\n-a\n+b',                                # so would the lines before the first hunk
 ]
 
 
@@ -306,7 +325,7 @@ def test_new_p1_fails_the_check_and_comes_first(tmp_path, monkeypatch):
 
 def test_untouched_finding_is_new_unless_the_base_version_has_it():
     head = [finding('app.py', 4, fingerprint='exec'), finding('app.py', 9, fingerprint='md5')]
-    changed = {'app.py': {3}}                                    # neither finding's line was edited
+    changed = {'app.py': added_lines('@@ -2,0 +3 @@\n+x')}     # line 3 added; neither finding's line was edited
     base = baseline_counts([finding('app.py', 8, fingerprint='md5')])   # the md5 call was there, one line higher
     by_line = {f['start_line']: (f['new'], f['new_because']) for f in triage(head, changed, base)}
     assert by_line == {4: (True, 'not in the base version'), 9: (False, None)}
@@ -314,27 +333,33 @@ def test_untouched_finding_is_new_unless_the_base_version_has_it():
     # Without a baseline only the changed lines decide, as before.
     assert [f['new'] for f in triage(head, changed)] == [False, False]
     # A different rule on the same lines is a different finding.
-    other = baseline_counts([finding('app.py', 4, fingerprint='exec', rule_id='another-rule')])
+    other = baseline_counts([finding('app.py', 3, fingerprint='exec', rule_id='another-rule')])
     assert triage(head[:1], changed, other)[0]['new']
+    # So is the same rule and line text on another line of the base version, and a line without a line map.
+    for elsewhere, lines in ((baseline_counts([finding('app.py', 2, fingerprint='md5')]), changed['app.py']),
+                             (base, {3})):
+        assert triage(head[1:], {'app.py': lines}, elsewhere)[0]['new_because'] == 'not in the base version'
 
 
 def test_baseline_matching_is_per_file_counted_and_fails_closed():
     twice = [finding('app.py', 2, fingerprint='x'), finding('app.py', 7, fingerprint='x')]
     once = baseline_counts([finding('app.py', 2, fingerprint='x')])
+    line_20 = {'app.py': added_lines('@@ -20 +20 @@\n-a\n+b')}   # only line 20 edited
     # The base had this finding once: the second copy is new.
-    assert [(f['start_line'], f['new']) for f in triage(twice, {'app.py': {20}}, once)] == [(7, True), (2, False)]
-    # A copy on a changed line is new without using up the base's match.
-    labels = {f['start_line']: f['new_because'] for f in triage(twice, {'app.py': {2}}, once)}
-    assert labels == {2: 'changed lines', 7: None}
+    assert [(f['start_line'], f['new']) for f in triage(twice, line_20, once)] == [(7, True), (2, False)]
+    # A copy on a changed line is new, and the base's finding on line 2 is not the untouched one on line 7.
+    line_2 = {'app.py': added_lines('@@ -2 +2 @@\n-a\n+b')}
+    labels = {f['start_line']: f['new_because'] for f in triage(twice, line_2, once)}
+    assert labels == {2: 'changed lines', 7: 'not in the base version'}
     # Another file's baseline does not count, and neither does an unknown one (missing or None).
     elsewhere = baseline_counts([finding('other.py', 2, fingerprint='x')])
     for baseline in (elsewhere, {}, {'app.py': None}):
-        assert all(f['new'] for f in triage(twice, {'app.py': {20}}, baseline)), baseline
+        assert all(f['new'] for f in triage(twice, line_20, baseline)), baseline
     # A finding without a fingerprint (its file could not be read) never matches.
-    assert triage([finding('app.py', 2)], {'app.py': {20}}, baseline_counts([finding('app.py', 2)]))[0]['new']
+    assert triage([finding('app.py', 2)], line_20, baseline_counts([finding('app.py', 2)]))[0]['new']
     # Renames: the base finding is counted under the file's new name.
     renamed = baseline_counts([finding('old.py', 2, fingerprint='x')], {'old.py': 'app.py'})
-    assert not triage(twice[:1], {'app.py': set()}, renamed)[0]['new']
+    assert not triage(twice[:1], {'app.py': ChangedLines()}, renamed)[0]['new']
     # Unknown changes still make everything new, whatever the base holds.
     assert triage(twice[:1], {'app.py': None}, once)[0]['new_because'] == 'changes unknown'
 
@@ -378,13 +403,20 @@ def test_pipeline_fails_when_a_change_elsewhere_introduces_a_finding_on_an_untou
     assert downloads == [('a' * 40, ['app.py'], {}), ('c' * 40, ['app.py'], {'lenient': True})]   # head, then merge base
     assert annotations[0]['annotation_level'] == 'failure'
     assert 'these lines are unchanged, but the finding was not there before' in annotations[0]['raw_details']
+    # So does one whose line text matches a base finding on another line: the App maps lines through the diff too.
+    scan = lambda root: [finding('app.py', 4 if root.name == 'head' else 2)]
+    edit = {'filename': 'app.py', 'status': 'modified', 'patch': '@@ -1 +1 @@\n-x = 1\n+x = 2'}
+    (conclusion, title, _, _), _ = run_pipeline_with_base(
+        tmp_path / 'elsewhere', monkeypatch, 'x = 2\nos.system(cmd)\n\nos.system(cmd)\n',
+        'x = 1\nos.system(cmd)\n\nos.system(cmd)\n', scan, {'app.py': changed_lines(edit)})
+    assert conclusion == 'failure' and title == '1 new P1 finding'
 
 
 def test_pipeline_keeps_a_finding_pre_existing_when_the_base_version_has_it(tmp_path, monkeypatch):
     scan = lambda root: [finding('app.py', 3 if root.name == 'head' else 2)]   # moved down one line, same text
     (conclusion, _, summary, annotations), _ = run_pipeline_with_base(
         tmp_path, monkeypatch, 'import os\n# note\nos.system(cmd)\n', 'import os\nos.system(cmd)\n',
-        scan, {'app.py': {2}})
+        scan, {'app.py': added_lines('@@ -1,0 +2 @@\n+# note')})
     assert conclusion == 'success' and '| P1 | 0 | 1 |' in summary
     assert 'the finding was already there' in annotations[0]['raw_details']
 

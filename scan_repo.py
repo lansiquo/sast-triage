@@ -26,8 +26,8 @@ from pathlib import Path
 from analyzers.semgrep_runner import (NEW_LEGEND, SemgrepInvocationError, _annotation_level, add_fingerprints,
                                       ascii_name, is_utf8_name, run_semgrep, summarize_findings,
                                       to_github_annotations)
-from analyzers.triage import (NOT_IN_BASE, added_lines, baseline_counts, gate, is_source_path, is_test_path,
-                              needs_base, triage)
+from analyzers.triage import (NOT_IN_BASE, ChangedLines, added_lines, baseline_counts, gate, is_source_path,
+                              is_test_path, needs_base, triage)
 from trusted_rules import OFFLINE_RULESET
 
 # Dependencies, build output and VCS metadata. The runner never scans the
@@ -69,8 +69,9 @@ def git(root: Path, *args: str, binary: bool = False):
     """
     try:
         # The project's own git config must not run anything: no fsmonitor hook, no external diff.
-        result = subprocess.run(['git', '-C', str(root), '-c', 'core.quotepath=off', '-c', 'core.fsmonitor=',
-                                 '-c', 'diff.external=', *args],
+        # --literal-pathspecs: a changed file's name is read as that name, never as pathspec magic or a glob.
+        result = subprocess.run(['git', '--literal-pathspecs', '-C', str(root), '-c', 'core.quotepath=off',
+                                 '-c', 'core.fsmonitor=', '-c', 'diff.external=', *args],
                                 capture_output=True, text=not binary, timeout=120,
                                 env={**os.environ, 'GIT_PAGER': 'cat', 'GIT_EXTERNAL_DIFF': ''})
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -81,6 +82,20 @@ def git(root: Path, *args: str, binary: bool = False):
         stderr = result.stderr.decode('utf-8', 'replace') if binary else result.stderr
         raise DiffError(stderr.strip() or f'git {args[0]} failed', result.returncode)
     return result.stdout
+
+
+GIT_ESCAPES = {'\a': 'a', '\b': 'b', '\t': 't', '\n': 'n', '\v': 'v', '\f': 'f', '\r': 'r', '"': '"', '\\': '\\'}
+
+
+def git_quoted(name: str) -> str:
+    """`name` as git writes it in a patch header with core.quotepath off.
+
+    In double quotes, C style, when it has a control character, a double quote or a backslash.
+    """
+    if not re.search(r'[\x00-\x1f"\\\x7f]', name):
+        return name
+    return '"' + re.sub(r'[\x00-\x1f"\\\x7f]',
+                        lambda m: '\\' + GIT_ESCAPES.get(m[0], f'{ord(m[0]):03o}'), name) + '"'
 
 
 def changes_since(root: Path, base: str):
@@ -152,10 +167,19 @@ def changes_since(root: Path, base: str):
             changed[path] = None
             continue
         paths = [old, path] if old is not None else [path]
-        patch = git(root, 'diff', '--relative', '-M', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', spec, '--', *paths)
+        patch = git(root, 'diff', '--relative', '-M', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv',
+                    '--dst-prefix=b/', spec, '--', *paths)
         hunks = patch.find('\n@@')
-        if hunks == -1:
-            changed[path] = set() if status.startswith('R') and 'Binary files' not in patch else None
+        # A rename's patch must name its new path: `+++ b/<path>` above its hunks, or `rename to <path>` when it
+        # has none. Any other patch is not this file's diff, so its changes are unknown.
+        if hunks != -1:
+            named = f'+++ {git_quoted("b/" + path)}' + ('\t' if ' ' in path else '')   # git adds a tab after a space
+        else:
+            named = f'rename to {git_quoted(path)}'
+        if status.startswith('R') and named not in (patch[:hunks] if hunks != -1 else patch).split('\n'):
+            changed[path] = None
+        elif hunks == -1:
+            changed[path] = ChangedLines() if status.startswith('R') and 'Binary files' not in patch else None
         else:
             changed[path] = added_lines(patch[hunks + 1:])
     return changed, previous, sorted(skipped)

@@ -246,6 +246,40 @@ def test_base_passes_when_only_pre_existing_findings_remain(tmp_path, capsys):
     assert 'New: on lines changed since main, or not in the file before those changes.' in out
 
 
+PREVIEW = ["  if (req.query.preview) {", "    const v = '<p>' + a;", '    return res.send(v);', '  }']
+
+
+def handler(a="req.query.name", b="'guest'", w='v', above=(), preview=PREVIEW, added=()):
+    """An Express handler whose line 5 decides which block's sink (lines 8 and 12) gets request data."""
+    return '\n'.join(["const express = require('express');", 'const app = express();', *above, '',
+                      "app.get('/', (req, res) => {", f'  const a = {a}, b = {b};', *preview, *added,
+                      '  {', f"    const {w} = '<p>' + b;", f'    return res.send({w});', '  }', '});'])
+
+
+# A finding on untouched lines is pre-existing only if the base version had it on the line it came from:
+# the same rule and line text on another line is a different finding.
+@pytest.mark.parametrize('base, head, status, found', [
+    # Editing line 5 moves request data from the sink on line 8 to the identical one on line 12.
+    (handler(), handler(a="'guest'", b='req.query.name'), 1, {12: True}),
+    (handler(w='w'), handler(a="'guest'", b='req.query.name', w='w'), 1, {12: True}),   # sink text differs
+    (handler(), handler(above=['// one', '// two']), 0, {10: False}),        # moved down two lines
+    (handler(), handler(added=PREVIEW), 1, {8: False, 12: True}),            # a copy of the sink is added
+    (handler(b='req.query.name'), handler(b='req.query.name', preview=()), 0, {8: False}),   # one of two removed
+])
+def test_base_matches_an_untouched_finding_by_the_line_it_came_from(tmp_path, capsys, base, head, status, found):
+    project(tmp_path, {'app.js': base})
+    git(tmp_path, 'init', '-q', '-b', 'main')
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'base')
+    git(tmp_path, 'switch', '-q', '-c', 'feature')
+    project(tmp_path, {'app.js': head})
+    git(tmp_path, 'commit', '-q', '-am', 'edit')
+    assert scan_repo.main([str(tmp_path), '--base', 'main', '--json']) == status
+    report = json.loads(capsys.readouterr().out)
+    assert {f['start_line']: f['new'] for f in report['findings'] if f['rule_id'] == 'js-xss'} == found
+    assert all(f['rule_id'] == 'js-xss' for f in report['findings'])
+
+
 def test_base_on_a_subfolder_uses_paths_relative_to_it(tmp_path, capsys):
     root = repository(tmp_path)
     assert scan_repo.main([str(root / 'web'), '--base', 'main', '--json']) == 1
@@ -327,6 +361,104 @@ def test_base_rename_without_edits_changes_nothing_but_a_change_with_no_line_dif
     assert scan_repo.main([str(root), '--base', 'main', '--json']) == 1   # unknown changes: every finding is new
     report = json.loads(capsys.readouterr().out)
     assert [(f['path'], f['priority'], f['new']) for f in report['findings']] == [('src/legacy.py', 'P1', True)]
+
+
+# --base: a changed file's name is read literally, never as git pathspec magic or a glob.
+
+HELPER_EVAL = ("const express = require('express');\nconst app = express();\n\n"
+               "app.get('/health', (req, res) => res.send('ok'));\n\nfunction adminTool(code) {\n"
+               "  return eval(code);\n}\n\napp.listen(3000);\n\nmodule.exports = { app, adminTool };\n// end")
+ROUTE_EVAL = ("const express = require('express');\nconst app = express();\n\n"
+              "app.get('/health', (req, res) => res.send('ok'));\n\n\n\napp.get('/run', (req, res) => {\n"
+              "  const code = req.query.code;\n  return eval(code);\n});\napp.listen(3000);\n\n"
+              "module.exports = { app };\n// end")
+
+
+def moved_eval(tmp_path, name):
+    """main has a pre-existing eval in a helper; the branch renames app.js to `name` and moves the eval into a route."""
+    project(tmp_path, {'app.js': HELPER_EVAL})
+    git(tmp_path, 'init', '-q', '-b', 'main')
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'base')
+    git(tmp_path, 'switch', '-q', '-c', 'feature')
+    (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+    git(tmp_path, 'mv', '--', 'app.js', name)
+    (tmp_path / name).write_text(ROUTE_EVAL + '\n')
+    git(tmp_path, 'commit', '-q', '-am', 'move the eval into a route')
+    return tmp_path
+
+
+@pytest.mark.parametrize('name', ['app2.js', ':app.js', ':!x.js', ':/app.js', ':(glob)app.js'])
+def test_base_rename_to_a_name_that_looks_like_pathspec_magic_still_shows_its_changed_lines(tmp_path, capsys, name):
+    root = moved_eval(tmp_path, name)
+    assert scan_repo.main([str(root), '--base', 'main']) == 1
+    out = capsys.readouterr().out
+    assert f'[P1, new] {name}:10  js-dangerous-eval' in out and '**Gate: FAIL**' in out
+
+
+@pytest.mark.parametrize('name', ['[ab].js', '?.js', '*.js'])
+def test_base_rename_to_a_name_with_glob_characters_reads_only_that_file(tmp_path, capsys, name):
+    project(tmp_path, {'x.js': 'const n = 1;\nconst total = eval(req.body.preTax);', 'a.js': 'const m = 1;'})
+    git(tmp_path, 'init', '-q', '-b', 'main')
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'base')
+    git(tmp_path, 'switch', '-q', '-c', 'feature')
+    git(tmp_path, 'mv', '--', 'x.js', name)                     # same content, new name
+    project(tmp_path, {'a.js': 'const m = 1;\nconst k = 2;'})   # a.js matches the name as a glob
+    git(tmp_path, 'commit', '-q', '-am', 'rename')
+    assert scan_repo.main([str(tmp_path), '--base', 'main', '--json']) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert [(f['path'], f['start_line'], f['priority'], f['new']) for f in report['findings']] == [
+        (name, 2, 'P1', False)]
+
+
+def old_name_only(real):
+    """git as if the new name were not read as itself: the patch then shows only the old name, as deleted."""
+    def run(root, *args, **options):
+        if args[0] == 'diff' and '--' in args:
+            args = args[:args.index('--') + 2]
+        return real(root, *args, **options)
+    return run
+
+
+def empty_patch(real):
+    def run(root, *args, **options):
+        return '' if args[0] == 'diff' and '--' in args else real(root, *args, **options)
+    return run
+
+
+@pytest.mark.parametrize('patch', [old_name_only, empty_patch])
+def test_base_rename_whose_patch_does_not_name_the_new_path_counts_every_finding_as_new(tmp_path, monkeypatch, capsys,
+                                                                                       patch):
+    root = moved_eval(tmp_path / 'edited', 'app2.js')
+    pure = repository(tmp_path / 'pure')
+    git(pure, 'switch', '-q', '-c', 'move-only', 'main')
+    git(pure, 'mv', 'src/legacy.py', 'src/moved.py')            # same content, new name
+    git(pure, 'commit', '-q', '-m', 'move')
+    monkeypatch.setattr(scan_repo, 'git', patch(scan_repo.git))
+    for directory, path, line in ((root, 'app2.js', 10), (pure, 'src/moved.py', 2)):
+        assert scan_repo.main([str(directory), '--base', 'main', '--json']) == 1
+        report = json.loads(capsys.readouterr().out)
+        found = [(f['path'], f['start_line'], f['priority'], f['new'], f['new_because']) for f in report['findings']]
+        assert found == [(path, line, 'P1', True, 'changes unknown')]
+
+
+@pytest.mark.parametrize('config', ['', '[diff]\n\tnoprefix = true\n', '[diff]\n\tdstPrefix = new/\n'])
+@pytest.mark.parametrize('name', ['src/moved.py', 'src/moved file.py', 'src/mo"ved.py', 'src/mo\\ved.py',
+                                  'src/mo\tved.py', 'src/é.py'])
+def test_base_rename_with_edits_keeps_a_finding_on_an_untouched_line_pre_existing(tmp_path, monkeypatch, capsys,
+                                                                                  config, name):
+    root = repository(tmp_path / 'repo')
+    (tmp_path / 'gitconfig').write_text(config)
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(tmp_path / 'gitconfig'))   # the user's own git config
+    git(root, 'switch', '-q', '-c', 'move-and-edit', 'main')
+    git(root, 'mv', '--', 'src/legacy.py', name)
+    project(root, {name: "import os\nos.popen('ls')\n# reviewed"})
+    git(root, 'commit', '-q', '-am', 'move and comment')
+    assert scan_repo.main([str(root), '--base', 'main', '--json']) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert [(f['path'], f['start_line'], f['priority'], f['new']) for f in report['findings']] == [
+        (name, 2, 'P1', False)]
 
 
 def test_base_exits_with_two_when_a_changed_file_is_missing_from_the_working_tree(tmp_path, capsys):
