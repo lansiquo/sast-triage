@@ -220,9 +220,10 @@ def source_files(root: Path):
     In a git work tree (the folder or one above it has a .git) the files are the ones
     `git ls-files --cached --others --exclude-standard` lists: tracked files, even if an ignore pattern
     matches them, and untracked files git does not ignore. What git ignores is left out and listed. Outside a
-    work tree every folder is read. Either way the EXCLUDED_DIRS folders, virtual environments and package
-    folders (environment()) and symbolic links are left out. Returns (files, [(path, reason)]).
-    A folder that can't be listed raises OSError, and a git failure raises DiffError.
+    work tree every folder is read. Either way the EXCLUDED_DIRS folders, minified files and symbolic links are
+    left out, and so are virtual environments and package folders (environment()), the scan root included; in a
+    work tree only their untracked files are, so committed content can't hide committed code.
+    Returns (files, [(path, reason)]). A folder that can't be listed raises OSError, and a git failure raises DiffError.
     """
     def unreadable(error):
         raise error   # a folder that can't be listed must not be skipped silently
@@ -230,6 +231,9 @@ def source_files(root: Path):
     found, skipped = [], set()
     # A work tree, as git finds one: a .git file (a linked work tree or a submodule) or a .git folder with a HEAD.
     if not any((folder / '.git').is_file() or (folder / '.git' / 'HEAD').is_file() for folder in (root, *root.parents)):
+        reason = environment(root)
+        if reason:   # the scan root itself: nothing in it is read
+            return [], [('./', reason)]
         for directory, folders, files in os.walk(root, onerror=unreadable):   # does not follow linked folders
             kept = []
             for name in folders:
@@ -246,27 +250,37 @@ def source_files(root: Path):
                     found.append(path.relative_to(root).as_posix())
         return sorted(found), sorted(skipped)
     # The -z lists are bytes, so every name is read exactly as git lists it (os.fsdecode, as os.walk reads it).
-    listed = git(root, 'ls-files', '--cached', '--others', '--exclude-standard', '-z', binary=True)
+    def names(listing):
+        return {os.fsdecode(name).rstrip('/') for name in listing.split(b'\0') if name}
+
+    tracked = names(git(root, 'ls-files', '--cached', '-z', binary=True))
+    untracked = names(git(root, 'ls-files', '--others', '--exclude-standard', '-z', binary=True))
     ignored = git(root, 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory',
                   '--no-empty-directory', '-z', binary=True)
-    reasons = {}   # folder -> environment(folder)
-    for path in sorted({os.fsdecode(name).rstrip('/') for name in listed.split(b'\0') if name}):
+    holding = {'/'.join(path.split('/')[:depth]) for path in tracked for depth in range(path.count('/') + 1)}
+    reasons = {}   # folder ('' is the scan root) -> environment(folder)
+
+    def why(folder):
+        if folder not in reasons:
+            reasons[folder] = environment(root / folder)
+        return reasons[folder]
+
+    for path in sorted(tracked | untracked):
         parts = path.split('/')
         if any(part in EXCLUDED_DIRS for part in parts[:-1]):
             continue
-        for depth in range(1, len(parts)):
-            folder = '/'.join(parts[:depth])
-            if folder not in reasons:
-                reasons[folder] = environment(root / folder)
-            if reasons[folder]:
-                skipped.add((printable(folder) + '/', reasons[folder]))
-                break
-        else:
-            file = root / path   # a tracked file may be gone, or replaced by a link or reached through one
-            if file.is_dir() and not file.is_symlink():   # git lists a submodule or nested repository, not its files
-                skipped.add((printable(path) + '/', 'separate git repository'))
-            elif scannable(path) and file.is_file() and file.resolve() == file:
-                found.append(path)
+        # A tracked file is always read; an untracked one is left out in a virtual environment or package folder.
+        folder = next((folder for folder in ('/'.join(parts[:depth]) for depth in range(len(parts))) if why(folder)),
+                      None) if path in untracked else None
+        if folder is not None:
+            reason = why(folder) + (', untracked files only' if folder in holding else '')
+            skipped.add((printable(folder) + '/' if folder else './', reason))
+            continue
+        file = root / path   # a tracked file may be gone, or replaced by a link or reached through one
+        if file.is_dir() and not file.is_symlink():   # git lists a submodule or nested repository, not its files
+            skipped.add((printable(path) + '/', 'separate git repository'))
+        elif scannable(path) and file.is_file() and file.resolve() == file:
+            found.append(path)
     inside = None   # the last ignored folder listed: git lists what is in it after it, and it stands for them
     for path in sorted(os.fsdecode(name) for name in ignored.split(b'\0') if name):
         if inside and path.startswith(inside):

@@ -117,14 +117,19 @@ def test_symbolic_links_are_not_followed(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)['files'] == ['app.js']
 
 
-# A full scan leaves out installed Python packages under any folder name and, in a git work tree, what git
-# ignores; it names both. Every flagged line below is in a folder the scan leaves out.
+# A full scan leaves out installed Python packages under any folder name, the scan root included, and, in a git
+# work tree, what git ignores; it names both. In a git work tree a tracked file is always scanned, even in such a
+# folder. Every flagged line below is in a folder the scan leaves out.
 LEFT_OUT = {
     'app.py': 'x = 1',
     'sast-venv/pyvenv.cfg': 'home = /usr/bin',                                      # a virtual environment
     'sast-venv/lib/python3.12/site-packages/pip/run.py': "import os\nos.popen('ls')",
+    'sast-venv/bin/tool.py': 'eval(code)',
     'lib/python3/dist-packages/six.py': 'eval(code)',                               # packages, no pyvenv.cfg
     'tools/site-packages/x.js': 'eval(code);',
+    'src/pyvenv.cfg': 'home = /usr/bin',                                            # tracked in a git work tree
+    'src/main.py': 'x = 4',                                                         # tracked in a git work tree
+    'src/new.py': 'eval(code)',                                                     # untracked
     '.gitignore': 'out/\nkept/\n',
     'out/gen.py': 'x = 2',                                                          # ignored by git
     'kept/tracked.py': 'x = 3',                                                     # tracked, but matches out/
@@ -132,33 +137,41 @@ LEFT_OUT = {
 }
 PACKAGES = [('lib/python3/dist-packages/', 'installed Python packages'), ('sast-venv/', 'virtual environment'),
             ('tools/site-packages/', 'installed Python packages')]
+UNTRACKED_ONLY = 'virtual environment, untracked files only'
 
 
-@pytest.mark.parametrize('in_git', [False, True], ids=['folder', 'git work tree'])
+@pytest.mark.parametrize('in_git, scan, scanned, skipped', [
+    (False, '', ['app.py', 'kept/tracked.py', 'new.js', 'out/gen.py'], PACKAGES + [('src/', 'virtual environment')]),
+    (True, '', ['app.py', 'kept/tracked.py', 'new.js', 'src/main.py'],
+     PACKAGES + [('other/', 'separate git repository'), ('out/', 'ignored by git'), ('src/', UNTRACKED_ONLY)]),
+    (False, 'sast-venv', [], [('./', 'virtual environment')]),
+    (True, 'sast-venv', [], [('./', 'virtual environment')]),
+    (False, 'lib/python3/dist-packages', [], [('./', 'installed Python packages')]),
+    (True, 'src', ['main.py'], [('./', UNTRACKED_ONLY)]),
+], ids=['folder', 'git work tree', 'venv root', 'venv root in git', 'dist-packages root', 'tracked in venv root'])
 def test_full_scan_leaves_out_virtual_environments_and_what_git_ignores_and_says_so(tmp_path, monkeypatch, capsys,
-                                                                                    in_git):
+                                                                                    in_git, scan, scanned, skipped):
     root = project(tmp_path / 'repo', LEFT_OUT)
     if in_git:
         git(root, 'init', '-q', '-b', 'main')
-        git(root, 'add', '.gitignore', 'app.py')
+        git(root, 'add', '.gitignore', 'app.py', 'src/pyvenv.cfg', 'src/main.py')
         git(root, 'add', '-f', 'kept/tracked.py')
         git(root, 'commit', '-q', '-m', 'base')
         project(root / 'other', {'x.js': 'eval(code);'})          # git lists a nested repository, not its files
         git(root / 'other', 'init', '-q')
+    root = root / scan
     assert scan_repo.main([str(root), '--json']) == 0
     report = json.loads(capsys.readouterr().out)
-    scanned = ['app.py', 'kept/tracked.py', 'new.js'] + ([] if in_git else ['out/gen.py'])
-    skipped = sorted(PACKAGES + ([('other/', 'separate git repository'), ('out/', 'ignored by git')] if in_git else []))
-    assert report['files'] == scanned and report['findings'] == [] and report['conclusion'] == 'success'
-    assert report['skipped_paths'] == [{'path': path, 'reason': reason} for path, reason in skipped]
+    assert report['files'] == scanned and report['findings'] == []
+    assert report['conclusion'] == ('success' if scanned else 'neutral')
+    assert report['skipped_paths'] == [{'path': path, 'reason': reason} for path, reason in sorted(skipped)]
     summary = tmp_path / 'summary.md'
     assert scan_repo.main([str(root), '--markdown', str(summary)]) == 0
-    nested = ('other/ (separate git repository), ', ', 1 path git ignores') if in_git else ('', '')
-    line = (f'lib/python3/dist-packages/ (installed Python packages), {nested[0]}sast-venv/ (virtual environment), '
-            f'tools/site-packages/ (installed Python packages){nested[1]}')
+    named = [f'{path} ({reason})' for path, reason in sorted(skipped) if reason != 'ignored by git']
+    line = ', '.join(named + (['1 path git ignores'] if len(named) < len(skipped) else []))
     assert f'folders and minified *.min.js files.\nSkipped: {line}.\n' in capsys.readouterr().out
     assert summary.read_text().endswith('\n\nSkipped: ' + re.sub(r'(\S+/) \(', r'`\1` (', line) + '.\n')
-    if in_git:   # a git failure stops the scan, as it does with --base
+    if in_git and not scan:   # a git failure stops the scan, as it does with --base
         real = scan_repo.subprocess.run
         monkeypatch.setattr(scan_repo.subprocess, 'run', lambda command, *a, **k: subprocess.CompletedProcess(
             command, 128, b'', b'fatal: index file corrupt\n') if 'ls-files' in command else real(command, *a, **k))
