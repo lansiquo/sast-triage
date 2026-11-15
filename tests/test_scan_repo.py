@@ -117,6 +117,70 @@ def test_symbolic_links_are_not_followed(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)['files'] == ['app.js']
 
 
+# A full scan leaves out installed Python packages under any folder name, the scan root included, and, in a git
+# work tree, what git ignores; it names both. In a git work tree a tracked file is always scanned, even in such a
+# folder. Every flagged line below is in a folder the scan leaves out.
+LEFT_OUT = {
+    'app.py': 'x = 1',
+    'sast-venv/pyvenv.cfg': 'home = /usr/bin',                                      # a virtual environment
+    'sast-venv/lib/python3.12/site-packages/pip/run.py': "import os\nos.popen('ls')",
+    'sast-venv/bin/tool.py': 'eval(code)',
+    'lib/python3/dist-packages/six.py': 'eval(code)',                               # packages, no pyvenv.cfg
+    'tools/site-packages/x.js': 'eval(code);',
+    'src/pyvenv.cfg': 'home = /usr/bin',                                            # tracked in a git work tree
+    'src/main.py': 'x = 4',                                                         # tracked in a git work tree
+    'src/new.py': 'eval(code)',                                                     # untracked
+    '.gitignore': 'out/\nkept/\n',
+    'out/gen.py': 'x = 2',                                                          # ignored by git
+    'kept/tracked.py': 'x = 3',                                                     # tracked, but matches out/
+    'new.js': 'const n = 1;',                                                       # untracked, not ignored
+}
+PACKAGES = [('lib/python3/dist-packages/', 'installed Python packages'), ('sast-venv/', 'virtual environment'),
+            ('tools/site-packages/', 'installed Python packages')]
+UNTRACKED_ONLY = 'virtual environment, untracked files only'
+
+
+@pytest.mark.parametrize('in_git, scan, scanned, skipped', [
+    (False, '', ['app.py', 'kept/tracked.py', 'new.js', 'out/gen.py'], PACKAGES + [('src/', 'virtual environment')]),
+    (True, '', ['app.py', 'kept/tracked.py', 'new.js', 'src/main.py'],
+     PACKAGES + [('other/', 'separate git repository'), ('out/', 'ignored by git'), ('src/', UNTRACKED_ONLY)]),
+    (False, 'sast-venv', [], [('./', 'virtual environment')]),
+    (True, 'sast-venv', [], [('./', 'virtual environment')]),
+    (False, 'lib/python3/dist-packages', [], [('./', 'installed Python packages')]),
+    (True, 'src', ['main.py'], [('./', UNTRACKED_ONLY)]),
+], ids=['folder', 'git work tree', 'venv root', 'venv root in git', 'dist-packages root', 'tracked in venv root'])
+def test_full_scan_leaves_out_virtual_environments_and_what_git_ignores_and_says_so(tmp_path, monkeypatch, capsys,
+                                                                                    in_git, scan, scanned, skipped):
+    root = project(tmp_path / 'repo', LEFT_OUT)
+    if in_git:
+        git(root, 'init', '-q', '-b', 'main')
+        git(root, 'add', '.gitignore', 'app.py', 'src/pyvenv.cfg', 'src/main.py')
+        git(root, 'add', '-f', 'kept/tracked.py')
+        git(root, 'commit', '-q', '-m', 'base')
+        project(root / 'other', {'x.js': 'eval(code);'})          # git lists a nested repository, not its files
+        git(root / 'other', 'init', '-q')
+    root = root / scan
+    assert scan_repo.main([str(root), '--json']) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report['files'] == scanned and report['findings'] == []
+    assert report['conclusion'] == ('success' if scanned else 'neutral')
+    assert report['skipped_paths'] == [{'path': path, 'reason': reason} for path, reason in sorted(skipped)]
+    summary = tmp_path / 'summary.md'
+    assert scan_repo.main([str(root), '--markdown', str(summary)]) == 0
+    named = [f'{path} ({reason})' for path, reason in sorted(skipped) if reason != 'ignored by git']
+    line = ', '.join(named + (['1 path git ignores'] if len(named) < len(skipped) else []))
+    assert f'folders and minified *.min.js files.\nSkipped: {line}.\n' in capsys.readouterr().out
+    assert summary.read_text().endswith('\n\nSkipped: ' + re.sub(r'(\S+/) \(', r'`\1` (', line) + '.\n')
+    if in_git and not scan:   # a git failure stops the scan, as it does with --base
+        real = scan_repo.subprocess.run
+        monkeypatch.setattr(scan_repo.subprocess, 'run', lambda command, *a, **k: subprocess.CompletedProcess(
+            command, 128, b'', b'fatal: index file corrupt\n') if 'ls-files' in command else real(command, *a, **k))
+        assert scan_repo.main([str(root), '--json']) == 2
+        captured = capsys.readouterr()
+        assert captured.out == '' and captured.err == ('error: cannot list the project files, no result issued.\n'
+                                                       'fatal: index file corrupt\n')
+
+
 def test_command_line_on_the_make_check_fixture():
     # `make check` runs this command and expects exit status 1: the planted P1 fails the gate.
     result = subprocess.run([sys.executable, 'scan_repo.py', 'tests/fixtures/project'], cwd=ROOT,
@@ -1356,17 +1420,23 @@ def test_a_scanner_error_of_several_lines_prints_as_before(tmp_path, monkeypatch
 # on git or on how it reports such names; they check only what main() prints for the names it is given.
 
 @pytest.mark.parametrize('arguments', [[], ['--json']], ids=['report', 'json'])
+@pytest.mark.parametrize('base', [True, False], ids=['changed files', 'full scan'])
 def test_hostile_file_names_cannot_issue_workflow_commands_from_the_skipped_changed_files(tmp_path, monkeypatch,
-                                                                                         capsys, arguments):
+                                                                                         capsys, arguments, base):
     monkeypatch.setattr(scan_repo, 'changes_since', lambda root, base: ({}, {}, list(HOSTILE)))
-    assert scan_repo.main([str(tmp_path), '--base', 'main', *arguments]) == 0
+    monkeypatch.setattr(scan_repo, 'source_files', lambda root: ([], [(name, 'virtual environment') for name in HOSTILE]))
+    assert scan_repo.main([str(tmp_path), *(['--base', 'main'] if base else []), *arguments]) == 0
     captured = capsys.readouterr()
     assert command_lines(captured) == [] and captured.err == ''
     if arguments:
-        assert json.loads(captured.out)['skipped_changed_files'] == HOSTILE
-    else:
+        report = json.loads(captured.out)
+        assert (report['skipped_changed_files'] if base else [p['path'] for p in report['skipped_paths']]) == HOSTILE
+    elif base:
         assert ('\nSkipped changed files: a?::warning::spoofed.js, b#?[warning]spoofed.js, c?::warning::spoofed.js\n'
                 in captured.out)
+    else:
+        assert ('\nSkipped: a?::warning::spoofed.js (virtual environment), b#?[warning]spoofed.js (virtual '
+                'environment), c?::warning::spoofed.js (virtual environment).\n' in captured.out)
 
 
 def test_hostile_file_names_cannot_issue_workflow_commands_from_the_missing_changed_files(tmp_path, monkeypatch,
