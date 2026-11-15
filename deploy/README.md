@@ -42,7 +42,14 @@ python3.13 -m venv .venv-service
 .venv-service/bin/python -m pip install --upgrade pip
 .venv-service/bin/python -m pip install -r deploy/requirements-service.lock
 .venv-service/bin/python -m pip check
-PRSEC_LOAD_DOTENV=0 .venv-service/bin/python -m pytest -q
+```
+
+The tests need PyYAML and Semgrep, which the service lock leaves out. Run them from a separate environment with the developer `requirements.txt`, as CI does, and never install it into `.venv-service`:
+
+```sh
+python3.13 -m venv .venv-test
+.venv-test/bin/python -m pip install -r requirements.txt
+PRSEC_LOAD_DOTENV=0 .venv-test/bin/python -m pytest -q
 ```
 
 Set [deployment.env.example](deployment.env.example) through the host's secret management, never via unreviewed shell files or arguments, and load the audited image locally. Validate each role as its service user:
