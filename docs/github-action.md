@@ -23,6 +23,9 @@ The checkout needs `fetch-depth: 0`, so the base branch's history is there to di
 - It installs only `requirements-cli.txt` with the runner's Python.
 - It uses no token and no other actions.
 - Annotations need no added permission.
+- It reads `PRSEC_SEMGREP_MIN_SEVERITY` from the workflow's environment. Leave it unset: findings below
+  that severity are dropped before triage and can't fail the gate. See
+  [Severity floor](github-app.md#severity-floor).
 
 ## Pin a version
 

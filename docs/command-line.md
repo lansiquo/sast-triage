@@ -8,6 +8,9 @@ the files a scan skips, the package build and the exit codes.
 - Requires Python 3.11–3.14.
 - `requirements-cli.txt` installs only Semgrep (pinned to the tested 1.79.0) and certifi.
 - Set `SEMGREP_BIN` to use another Semgrep.
+- Leave `PRSEC_SEMGREP_MIN_SEVERITY` unset. If set, findings below that severity are dropped before
+  triage, so they are never reported and can't fail the gate: see
+  [Severity floor](github-app.md#severity-floor).
 - A scan needs no GitHub account, token or network.
 
 ## Options
