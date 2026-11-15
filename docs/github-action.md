@@ -29,7 +29,7 @@ The checkout needs `fetch-depth: 0`, so the base branch's history is there to di
 
 ## Pin a version
 
-Pin a release tag such as `@v2.6.3`, or a full commit SHA for the strictest supply-chain safety.
+Pin a release tag such as `@v2.6.4`, or a full commit SHA for the strictest supply-chain safety.
 
 A pull request that can edit the workflow can edit this step too. The
 [GitHub App](github-app.md) runs outside the repository's workflows.
