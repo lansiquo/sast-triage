@@ -138,9 +138,9 @@ lists them all.
   `nosemgrep` comments are not used, and Semgrep never downloads rules.
 - **Rules match within one file.** A value that passes through another function or module before it
   reaches a dangerous call is not traced.
-- **New is judged file by file.** A finding is matched to the base version by its rule and the text of
-  the lines it covers. Only changed files are scanned, so a change in one file can't raise a finding in
-  another that it didn't touch.
+- **New is judged file by file.** A finding is matched to the base version by its rule, the text of
+  the lines it covers and the line it came from. Only changed files are scanned, so a change in one
+  file can't raise a finding in another that it didn't touch.
 - **Size limits fail closed:** 1 MiB per scanned file; for the GitHub App also a 1 MiB webhook body,
   fewer than 3,000 changed files and at most 500 changed Python, JavaScript and TypeScript files per pull
   request. The App downloads only those files, so the size of the repository doesn't matter.

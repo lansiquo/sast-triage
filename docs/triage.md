@@ -23,6 +23,10 @@ A finding on untouched lines is new too when the file didn't have it before. The
 changed file is scanned too, so editing one line can't slip in a finding on another. Only files with a
 finding on untouched lines need it, so most pull requests are scanned once.
 
+Such a finding is pre-existing only if the base version had the same rule and line text on the line it
+came from, found through the diff. Lines added above it move it, and it stays pre-existing. The same text
+on another line of the base version is a different finding.
+
 For example, changing `const cmd = 'ls'` to `'ls ' + req.query.dir` makes the untouched `exec(cmd)` below
 it a new P1.
 

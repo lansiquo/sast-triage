@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set
 
 # "@@ -12,4 +12,6 @@ optional context": the old file's hunk covers 4 lines from
 # line 12, the new file's 6 lines from line 12. An omitted count means 1.
-HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 
 # File types the service-owned rules cover. Everything else is never staged.
@@ -30,7 +30,25 @@ def is_source_path(path: str) -> bool:
     return path.endswith(SOURCE_EXTENSIONS)
 
 
-def added_lines(patch: Optional[str]) -> Optional[Set[int]]:
+class ChangedLines(set):
+    """The lines a diff added or changed, which also knows where each other line was in the old file."""
+
+    def __init__(self, lines=(), shifts=()):
+        super().__init__(lines)
+        # (first new line, old line minus new line from there on), in line order.
+        self.shifts = list(shifts)
+
+    def base_line(self, line: int) -> int:
+        """The old file's number of a line the diff left unchanged."""
+        delta = 0
+        for first, shift in self.shifts:
+            if first > line:
+                break
+            delta = shift
+        return line + delta
+
+
+def added_lines(patch: Optional[str]) -> Optional[ChangedLines]:
     """Return the line numbers (in the new file) that a unified diff adds or changes.
 
     A changed line shows up in a diff as a removed line plus an added one, so
@@ -42,15 +60,18 @@ def added_lines(patch: Optional[str]) -> Optional[Set[int]]:
     str.splitlines() would also split on form feeds, U+2028 and other
     characters that are legal inside Python comments and strings, shifting
     every later line number. Each hunk must also hold exactly the old and new
-    line counts its header declares; anything else is unknown.
+    line counts its header declares, and start where the previous one left
+    both files, since the lines between hunks are unchanged; anything else is
+    unknown. The result also maps each unchanged line to its old line number.
     """
     if not isinstance(patch, str) or not patch:
         return None
     rows = patch.split("\n")
     if rows[-1] == "":
         rows.pop()  # a trailing newline ends the last row; it is not a row
-    lines: Set[int] = set()
+    lines = ChangedLines()
     line = None
+    old = 1  # the next line of the old file
     old_left = new_left = 0
     for row in rows:
         if row.endswith("\r"):
@@ -59,10 +80,16 @@ def added_lines(patch: Optional[str]) -> Optional[Set[int]]:
         if header:
             if old_left or new_left:
                 return None  # previous hunk ended early
-            old_count, start, new_count = header.groups()
+            old_start, old_count, start, new_count = header.groups()
             old_left = int(old_count) if old_count is not None else 1
             new_left = int(new_count) if new_count is not None else 1
-            line = int(start)
+            # An empty side's start is the line before the hunk.
+            hunk_old, hunk_new = int(old_start) + (not old_left), int(start) + (not new_left)
+            if line is None:
+                line = 1
+            if hunk_new < line or hunk_old - hunk_new != old - line:
+                return None  # out of order, or unchanged lines between hunks that differ
+            old, line = hunk_old, hunk_new
         elif line is None:
             return None  # text before the first hunk header
         elif row.startswith("\\"):
@@ -76,15 +103,20 @@ def added_lines(patch: Optional[str]) -> Optional[Set[int]]:
         elif row.startswith(" ") or row == "":
             if not old_left or not new_left:
                 return None
+            lines.shifts.append((line, old - line))
             line += 1  # unchanged context line
+            old += 1
             old_left -= 1
             new_left -= 1
         elif row.startswith("-"):
             if not old_left:
                 return None
+            old += 1
             old_left -= 1  # removed line
         else:
             return None
+        if not (old_left or new_left):
+            lines.shifts.append((line, old - line))  # the hunk ended: where the next unchanged line comes from
     if line is None or old_left or new_left:
         return None  # no hunk, or the last hunk ended early
     return lines
@@ -105,7 +137,7 @@ def changed_lines(entry: Dict[str, Any]) -> Optional[Set[int]]:
         if isinstance(previous, str) and is_test_path(previous) and not is_test_path(entry.get("filename", "")):
             return None
     if entry.get("status") == "renamed" and entry.get("changes") == 0:
-        return set()
+        return ChangedLines()
     return added_lines(entry.get("patch"))
 
 
@@ -165,13 +197,13 @@ def baseline_counts(base_findings: List[Dict[str, Any]],
     """Count the findings in the base version of each file, keyed by the file's path in the head.
 
     `head_path` maps a base path to the head path of the same file (for renames). A
-    finding is identified by its rule and the fingerprint of the lines it covers, so
-    it is recognised in the head whatever line it has moved to.
+    finding is identified by its rule, the fingerprint of the lines it covers and its
+    first line, so triage() recognises it in the head on the line the diff moved it to.
     """
     counts: Dict[str, Counter] = {}
     for f in base_findings:
         path = (head_path or {}).get(f["path"], f["path"])
-        counts.setdefault(path, Counter())[(f["rule_id"], f.get("fingerprint"))] += 1
+        counts.setdefault(path, Counter())[(f["rule_id"], f.get("fingerprint"), f["start_line"])] += 1
     return counts
 
 
@@ -200,9 +232,12 @@ def triage(findings: List[Dict[str, Any]], changed: Dict[str, Optional[Set[int]]
 
     `baseline` (from baseline_counts) holds the findings of each changed file's
     base version. With it, a finding on untouched lines is pre-existing only if
-    the base version has it too: a change elsewhere in the file (a variable that
+    the base version has it too, with the same rule and line text, on the line
+    the diff says it came from: a change elsewhere in the file (a variable that
     now carries request data, a new import) can make an untouched line match, and
-    that finding was introduced by the change. A file missing from `baseline`, or
+    that finding was introduced by the change, even when another line of the base
+    version reads the same. Changed lines without a line map (a plain set) leave
+    that line unknown, so the finding is new. A file missing from `baseline`, or
     mapped to None, has an unknown base version, so its findings are new. Without
     a baseline (None) only the changed lines decide.
     """
@@ -218,9 +253,10 @@ def triage(findings: List[Dict[str, Any]], changed: Dict[str, Optional[Set[int]]
         elif baseline is None:
             reason = None
         else:
-            key = (f["rule_id"], f.get("fingerprint"))
+            base_line = lines.base_line(f["start_line"]) if isinstance(lines, ChangedLines) else None
+            key = (f["rule_id"], f.get("fingerprint"), base_line)
             counts = remaining.get(f["path"])
-            if counts is not None and f.get("fingerprint") and counts[key] > 0:
+            if counts is not None and f.get("fingerprint") and base_line is not None and counts[key] > 0:
                 counts[key] -= 1
                 reason = None
             else:

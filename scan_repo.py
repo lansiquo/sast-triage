@@ -26,8 +26,8 @@ from pathlib import Path
 from analyzers.semgrep_runner import (NEW_LEGEND, SemgrepInvocationError, _annotation_level, add_fingerprints,
                                       ascii_name, is_utf8_name, run_semgrep, summarize_findings,
                                       to_github_annotations)
-from analyzers.triage import (NOT_IN_BASE, added_lines, baseline_counts, gate, is_source_path, is_test_path,
-                              needs_base, triage)
+from analyzers.triage import (NOT_IN_BASE, ChangedLines, added_lines, baseline_counts, gate, is_source_path,
+                              is_test_path, needs_base, triage)
 from trusted_rules import OFFLINE_RULESET
 
 # Dependencies, build output and VCS metadata. The runner never scans the
@@ -151,7 +151,7 @@ def changes_since(root: Path, base: str):
         patch = git(root, 'diff', '--relative', '-M', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', spec, '--', *paths)
         hunks = patch.find('\n@@')
         if hunks == -1:
-            changed[path] = set() if status.startswith('R') and 'Binary files' not in patch else None
+            changed[path] = ChangedLines() if status.startswith('R') and 'Binary files' not in patch else None
         else:
             changed[path] = added_lines(patch[hunks + 1:])
     return changed, previous, sorted(skipped)
