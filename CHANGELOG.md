@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - **A finding on lines a pull request left unchanged now counts as pre-existing only when the base version had it, with the same rule and line text, on the line it came from; the same text on another line of the base version no longer makes it pre-existing.** The command line with `--base`, the GitHub Action and the GitHub App map each unchanged line to its base version line through the diff. A finding moved by lines added above it stays pre-existing, and full scans are unchanged. (GHSA-w4xw-429c-9q59)
+- **`--base` scans now read every changed file name as that name, so a renamed file can no longer hide its changed lines and let a new P1 pass as pre-existing.** (GHSA-w4xw-429c-9q59)
 
 ## [2.6.3] - 2026-11-14
 ### Fixed
