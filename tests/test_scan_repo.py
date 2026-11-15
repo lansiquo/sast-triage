@@ -182,6 +182,40 @@ def test_base_passes_when_only_pre_existing_findings_remain(tmp_path, capsys):
     assert 'New: on lines changed since main, or not in the file before those changes.' in out
 
 
+PREVIEW = ["  if (req.query.preview) {", "    const v = '<p>' + a;", '    return res.send(v);', '  }']
+
+
+def handler(a="req.query.name", b="'guest'", w='v', above=(), preview=PREVIEW, added=()):
+    """An Express handler whose line 5 decides which block's sink (lines 8 and 12) gets request data."""
+    return '\n'.join(["const express = require('express');", 'const app = express();', *above, '',
+                      "app.get('/', (req, res) => {", f'  const a = {a}, b = {b};', *preview, *added,
+                      '  {', f"    const {w} = '<p>' + b;", f'    return res.send({w});', '  }', '});'])
+
+
+# A finding on untouched lines is pre-existing only if the base version had it on the line it came from:
+# the same rule and line text on another line is a different finding.
+@pytest.mark.parametrize('base, head, status, found', [
+    # Editing line 5 moves request data from the sink on line 8 to the identical one on line 12.
+    (handler(), handler(a="'guest'", b='req.query.name'), 1, {12: True}),
+    (handler(w='w'), handler(a="'guest'", b='req.query.name', w='w'), 1, {12: True}),   # sink text differs
+    (handler(), handler(above=['// one', '// two']), 0, {10: False}),        # moved down two lines
+    (handler(), handler(added=PREVIEW), 1, {8: False, 12: True}),            # a copy of the sink is added
+    (handler(b='req.query.name'), handler(b='req.query.name', preview=()), 0, {8: False}),   # one of two removed
+])
+def test_base_matches_an_untouched_finding_by_the_line_it_came_from(tmp_path, capsys, base, head, status, found):
+    project(tmp_path, {'app.js': base})
+    git(tmp_path, 'init', '-q', '-b', 'main')
+    git(tmp_path, 'add', '.')
+    git(tmp_path, 'commit', '-q', '-m', 'base')
+    git(tmp_path, 'switch', '-q', '-c', 'feature')
+    project(tmp_path, {'app.js': head})
+    git(tmp_path, 'commit', '-q', '-am', 'edit')
+    assert scan_repo.main([str(tmp_path), '--base', 'main', '--json']) == status
+    report = json.loads(capsys.readouterr().out)
+    assert {f['start_line']: f['new'] for f in report['findings'] if f['rule_id'] == 'js-xss'} == found
+    assert all(f['rule_id'] == 'js-xss' for f in report['findings'])
+
+
 def test_base_on_a_subfolder_uses_paths_relative_to_it(tmp_path, capsys):
     root = repository(tmp_path)
     assert scan_repo.main([str(root / 'web'), '--base', 'main', '--json']) == 1
