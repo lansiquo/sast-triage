@@ -310,7 +310,8 @@ def test_base_rename_to_a_name_with_glob_characters_reads_only_that_file(tmp_pat
     git(tmp_path, 'commit', '-q', '-am', 'rename')
     assert scan_repo.main([str(tmp_path), '--base', 'main', '--json']) == 0
     report = json.loads(capsys.readouterr().out)
-    assert [(f['path'], f['start_line'], f['priority'], f['new']) for f in report['findings']] == [(name, 2, 'P1', False)]
+    assert [(f['path'], f['start_line'], f['priority'], f['new']) for f in report['findings']] == [
+        (name, 2, 'P1', False)]
 
 
 def old_name_only(real):
@@ -340,8 +341,8 @@ def test_base_rename_whose_patch_does_not_name_the_new_path_counts_every_finding
     for directory, path, line in ((root, 'app2.js', 10), (pure, 'src/moved.py', 2)):
         assert scan_repo.main([str(directory), '--base', 'main', '--json']) == 1
         report = json.loads(capsys.readouterr().out)
-        assert [(f['path'], f['start_line'], f['priority'], f['new'], f['new_because']) for f in report['findings']] == [
-            (path, line, 'P1', True, 'changes unknown')]
+        found = [(f['path'], f['start_line'], f['priority'], f['new'], f['new_because']) for f in report['findings']]
+        assert found == [(path, line, 'P1', True, 'changes unknown')]
 
 
 @pytest.mark.parametrize('config', ['', '[diff]\n\tnoprefix = true\n', '[diff]\n\tdstPrefix = new/\n'])
@@ -358,7 +359,8 @@ def test_base_rename_with_edits_keeps_a_finding_on_an_untouched_line_pre_existin
     git(root, 'commit', '-q', '-am', 'move and comment')
     assert scan_repo.main([str(root), '--base', 'main', '--json']) == 0
     report = json.loads(capsys.readouterr().out)
-    assert [(f['path'], f['start_line'], f['priority'], f['new']) for f in report['findings']] == [(name, 2, 'P1', False)]
+    assert [(f['path'], f['start_line'], f['priority'], f['new']) for f in report['findings']] == [
+        (name, 2, 'P1', False)]
 
 
 def test_base_exits_with_two_when_a_changed_file_is_missing_from_the_working_tree(tmp_path, capsys):
